@@ -1,0 +1,11 @@
+
+> swipe-saas-backend@1.0.0 dev
+> nodemon --watch src --ext ts --exec ts-node src/index.ts
+
+[33m[nodemon] 3.1.14[39m
+[33m[nodemon] to restart at any time, enter `rs`[39m
+[33m[nodemon] watching path(s): src\**\*[39m
+[33m[nodemon] watching extensions: ts[39m
+[32m[nodemon] starting `ts-node src/index.ts`[39m
+{"level":30,"time":1776698232620,"pid":1752,"hostname":"DESKTOP-4F76PTF","msg":"Server listening at http://0.0.0.0:4002"}
+SwipeSaaS API running on http://localhost:4002
