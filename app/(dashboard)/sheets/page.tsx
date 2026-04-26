@@ -7,6 +7,9 @@ import {
   CheckCircle2, Pencil,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth-context'
+import { logAction } from '@/lib/audit-log'
+import AcSheetView from '@/components/sheets/AcSheetView'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface TxRow {
@@ -76,7 +79,7 @@ const COLS: ColDef[] = [
 
 const LEFT_SHEETS = [
   { id:'daily_register',  label:'daily_register',  ready:true  },
-  { id:'ac_sheet',        label:'ac_sheet',        ready:false },
+  { id:'ac_sheet',        label:'ac_sheet',        ready:true  },
   { id:'cc_sheet',        label:'cc_sheet',        ready:true  },
   { id:'bl_sheet',        label:'bl_sheet',        ready:false },
   { id:'chamunda_sheet',  label:'chamunda_sheet',  ready:false },
@@ -294,8 +297,26 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
       setInsertError(error.message)
     } else {
       if(data) {
-        createCCSheetRow(data as Record<string,unknown>)
-        createCustomerSheetRow({...(data as Record<string,unknown>), customer_id: selectedCustomer?.id || null})
+        const d = data as Record<string,unknown>
+        createCCSheetRow(d)
+        createCustomerSheetRow({...d, customer_id: selectedCustomer?.id || null})
+        logAction({
+          action: 'Transaction Created',
+          module: 'Daily Register',
+          details: {
+            sr_no: d.sr_no,
+            customer_name: d.customer_name,
+            bank_card: d.bank_card,
+            total_amount: d.total_amount,
+            paid_amount: d.paid_amount,
+            account_name: d.account_name,
+            swap_amount: d.swap_amount,
+            swap_name: d.swap_name,
+            remarks: d.remarks,
+            commission_pct: d.commission_pct,
+            date: d.date,
+          },
+        })
       }
       onInserted()
       onClose()
@@ -751,6 +772,16 @@ function CustomerSheetView() {
     const {error} = await supabase.from('customer_sheet').update({[field]:dbVal}).eq('id',rowId)
     if(error){ showToast('Save failed: '+error.message,'error') }
     else {
+      logAction({
+        action: 'Customer Sheet Row Updated',
+        module: 'Customer Sheet',
+        details: {
+          customer_name: row.customer_name,
+          field_changed: field,
+          old_value: String(origVal),
+          new_value: String(dbVal ?? ''),
+        },
+      })
       // flash
       const key=`${rowId}__${field}`
       setFlashCells(s=>new Set(s).add(key))
@@ -764,9 +795,20 @@ function CustomerSheetView() {
   function cancelEdit() { setEditCell(null) }
 
   async function deleteRow(rowId:string) {
+    const row = allRows.find(r=>r.id===rowId)
     const {error} = await supabase.from('customer_sheet').delete().eq('id',rowId)
     if(error){ showToast('Delete failed: '+error.message,'error') }
-    else { setAllRows(prev=>prev.filter(r=>r.id!==rowId)); showToast('Row deleted') }
+    else {
+      setAllRows(prev=>prev.filter(r=>r.id!==rowId))
+      showToast('Row deleted')
+      if(row) {
+        logAction({
+          action: 'Customer Sheet Row Deleted',
+          module: 'Customer Sheet',
+          details: { customer_name: row.customer_name, id: rowId },
+        })
+      }
+    }
     setDeleteConfirm(null)
   }
 
@@ -1442,6 +1484,7 @@ function SheetTable({dateGroups,flashCells,editCell,renderCell,startEdit,COLS}:S
 
 // ── Main Page ──────────────────────────────────────────────────────────────────
 export default function SheetsPage() {
+  const auth = useAuth()
   const [allRows, setAllRows]     = useState<TxRow[]>([])  // master — unfiltered
   const [loading, setLoading]     = useState(false)
   const [realtimeOk, setRealtimeOk] = useState(false)
@@ -1515,17 +1558,24 @@ export default function SheetsPage() {
   // ── Fetch ALL data once; month filtering is client-side ──
   const fetchAll = useCallback(async () => {
     setLoading(true)
-    const { data, error } = await supabase
-      .from('transactions')
-      .select('*')
-      .order('sr_no', { ascending: true })
+    let query = supabase.from('transactions').select('*').order('sr_no', { ascending: true })
+
+    // Sub admin: filter to only their assigned accounts
+    if (auth?.role === 'sub_admin' && auth.assigned_accounts.length > 0) {
+      const accountFilter = auth.assigned_accounts
+        .map(a => `account_name.ilike.%${a}%`)
+        .join(',')
+      query = query.or(accountFilter)
+    }
+
+    const { data, error } = await query
     if (error) console.error('[sheets] fetch error:', error.message)
     const fetched = (data as TxRow[]) || []
     console.log('[sheets] fetched', fetched.length, 'rows')
     setAllRows(fetched)
     setPage(1)
     setLoading(false)
-  }, [])
+  }, [auth])
 
   useEffect(() => { fetchAll() }, [fetchAll])
 
@@ -1613,6 +1663,18 @@ export default function SheetsPage() {
     setEditCell(null)
     const {error} = await supabase.from('transactions').update({[col]:parsed}).eq('id',id)
     if(!error){
+      const oldRow = allRows.find((r:TxRow)=>r.id===id)
+      logAction({
+        action: 'Transaction Updated',
+        module: 'Daily Register',
+        details: {
+          sr_no: oldRow?.sr_no,
+          field_changed: col,
+          old_value: String(oldRow?.[col as keyof TxRow] ?? ''),
+          new_value: String(parsed ?? ''),
+          customer_name: oldRow?.customer_name,
+        },
+      })
       setAllRows(rs=>rs.map((r:TxRow)=>r.id===id?{...r,[col]:parsed}:r))
       const key=`${id}__${col}`
       setFlashCells(s=>new Set(Array.from(s).concat(key)))
@@ -1891,6 +1953,18 @@ export default function SheetsPage() {
       ))}
     </div>
   )
+
+  if(activeSheet==='ac_sheet') {
+    return (
+      <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
+        <LeftPanel/>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <TabBar/>
+          <AcSheetView/>
+        </div>
+      </div>
+    )
+  }
 
   if(activeSheet==='cc_sheet') {
     return (

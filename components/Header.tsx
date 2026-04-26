@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Bell, Settings, Search, X, User, LogOut, Lock, KeyRound, FileText, Users, ChevronRight, CreditCard, ArrowRight } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth-context'
+import { logAction } from '@/lib/audit-log'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface SearchCustomer {
@@ -374,11 +376,16 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
     if (form.newPass !== form.confirm) { setToast({ msg: 'Passwords do not match', type: 'error' }); return }
     if (form.newPass.length < 6) { setToast({ msg: 'Password must be at least 6 characters', type: 'error' }); return }
     setSaving(true)
-    const { error } = await supabase.auth.updateUser({ password: form.newPass })
+    const { data: { user }, error } = await supabase.auth.updateUser({ password: form.newPass })
     setSaving(false)
     if (error) {
       setToast({ msg: error.message, type: 'error' })
     } else {
+      await logAction({
+        action: 'Password Changed',
+        module: 'Users & Roles',
+        details: { target_user: user?.email || '' },
+      })
       setToast({ msg: 'Password updated successfully', type: 'success' })
       setTimeout(onClose, 1500)
     }
@@ -439,16 +446,24 @@ function ProfileDropdown({
 }) {
   const router = useRouter()
   const ref = useRef<HTMLDivElement>(null)
+  const auth = useAuth()
   useClickOutside(ref, onClose)
-  const [userEmail, setUserEmail] = useState('')
 
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      setUserEmail(data.user?.email || 'admin@swipesaas.com')
-    })
-  }, [])
+  const displayName = auth?.full_name || 'User'
+  const displayEmail = auth?.email || ''
+  const avatarInitials = displayName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
+  const isSuperAdmin = auth?.role === 'super_admin'
+  const roleBadge = isSuperAdmin ? 'SUPER ADMIN' : 'SUB ADMIN'
+  const roleBadgeStyle = isSuperAdmin
+    ? { background: '#d1fae5', color: '#065f46' }
+    : { background: '#ede9fe', color: '#5b21b6' }
 
   async function handleLogout() {
+    await logAction({
+      action: 'Logout',
+      module: 'Auth',
+      details: { email: displayEmail, timestamp: new Date().toISOString() },
+    })
     await supabase.auth.signOut()
     router.push('/login')
   }
@@ -462,13 +477,13 @@ function ProfileDropdown({
       {/* Profile header */}
       <div className="px-4 py-4 border-b border-[#e5e7eb] flex items-center gap-3">
         <div className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: '#3ECF8E' }}>
-          A
+          {avatarInitials}
         </div>
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-[#1a1a1a] truncate">Super Admin</div>
-          <div className="text-xs text-[#6b7280] truncate">{userEmail}</div>
-          <span className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: '#d1fae5', color: '#065f46' }}>
-            SUPER ADMIN
+          <div className="text-sm font-semibold text-[#1a1a1a] truncate">{displayName}</div>
+          <div className="text-xs text-[#6b7280] truncate">{displayEmail}</div>
+          <span className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style={roleBadgeStyle}>
+            {roleBadge}
           </span>
         </div>
       </div>
@@ -508,6 +523,8 @@ function ProfileDropdown({
 // ── Header ─────────────────────────────────────────────────────────────────────
 export default function Header() {
   const router = useRouter()
+  const auth = useAuth()
+  const headerInitials = (auth?.full_name || 'U').split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
   const [showSearch, setShowSearch] = useState(false)
   const [showNotifs, setShowNotifs] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -621,7 +638,7 @@ export default function Header() {
               style={{ background: '#3ECF8E' }}
               onClick={() => { setShowProfile(v => !v); setShowNotifs(false); setShowSettings(false) }}
             >
-              A
+              {headerInitials}
             </button>
             {showProfile && (
               <ProfileDropdown

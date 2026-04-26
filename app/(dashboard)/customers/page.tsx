@@ -5,6 +5,7 @@ import { Search, Plus, X, Edit, RefreshCw, ChevronDown, ChevronRight, CreditCard
 import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { Customer, Transaction, Card, CustomerBankAccount } from '@/types/database'
+import { logAction } from '@/lib/audit-log'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function maskCard(num: string) {
@@ -288,6 +289,32 @@ function CustomerPanel({
       console.log('[save] done — cards:', validCards.length, 'accounts:', validAccts.length)
       setSaving(false)
       setToast(`Saved with ${validCards.length} card(s) and ${validAccts.length} account(s)`)
+
+      if (isEdit && customer) {
+        const changedFields: Record<string, { old: unknown; new: unknown }> = {}
+        if (basic.name !== customer.name) changedFields.name = { old: customer.name, new: basic.name }
+        if (basic.phone !== customer.phone) changedFields.phone = { old: customer.phone, new: basic.phone }
+        const oldCharge = String(customer.default_charge_pct || '2.2')
+        if (basic.charge !== oldCharge) changedFields.default_charge_pct = { old: oldCharge, new: basic.charge }
+        await logAction({
+          action: 'Customer Updated',
+          module: 'Customers',
+          details: { customer_id: customerId, name: basic.name, changed_fields: changedFields },
+        })
+      } else {
+        await logAction({
+          action: 'Customer Created',
+          module: 'Customers',
+          details: { name: basic.name, phone: basic.phone, default_charge_pct: parseFloat(basic.charge) || 2.2 },
+        })
+        for (const c of validCards) {
+          await logAction({
+            action: 'Card Added',
+            module: 'Customers',
+            details: { customer_name: basic.name, bank_name: c.bank_name, last4: c.last4, card_type: c.card_type ?? 'Credit' },
+          })
+        }
+      }
       setTimeout(() => { onSaved(); onClose() }, 1200)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unknown error'
@@ -427,8 +454,16 @@ function ExpandedRow({
   }, [customer.id])
 
   async function deleteCard(id: string) {
+    const card = cards.find(c => c.id === id)
     await supabase.from('cards').delete().eq('id', id)
     setCards(cs => cs.filter(c => c.id !== id))
+    if (card) {
+      logAction({
+        action: 'Card Deleted',
+        module: 'Customers',
+        details: { customer_name: customer.name, bank_name: card.bank_name, last4: card.last4 },
+      })
+    }
   }
   async function deleteAcct(id: string) {
     await supabaseAdmin.from('customer_bank_accounts').delete().eq('id', id)
@@ -683,9 +718,17 @@ export default function CustomersPage() {
       if (ae) throw new Error('Delete accounts failed: ' + ae.message)
       const { error: cue } = await supabaseAdmin.from('customers').delete().eq('id', deleteTarget.id)
       if (cue) throw new Error('Delete customer failed: ' + cue.message)
+      const deletedName = deleteTarget.name
+      const deletedPhone = deleteTarget.phone
+      const deletedId = deleteTarget.id
       setDeleteTarget(null)
-      showToast(`${deleteTarget.name} deleted`)
+      showToast(`${deletedName} deleted`)
       fetchCustomers()
+      logAction({
+        action: 'Customer Deleted',
+        module: 'Customers',
+        details: { name: deletedName, phone: deletedPhone, id: deletedId },
+      })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Delete failed'
       console.error('[delete]', msg)

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Search, Plus, RefreshCw, X, ChevronDown, ChevronUp, Edit2, ShieldOff, ShieldCheck } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { logAction } from '@/lib/audit-log'
 
 interface SwipeMachine {
   id: string
@@ -128,11 +129,38 @@ export default function MachinesPage() {
     if (editMachine) {
       const { error } = await supabase.from('swipe_machines').update(payload).eq('id', editMachine.id)
       if (error) showToast('Update failed: ' + error.message, 'error')
-      else { showToast('Machine updated'); setShowPanel(false); fetchMachines() }
+      else {
+        showToast('Machine updated'); setShowPanel(false); fetchMachines()
+        const changedFields: Record<string, { old: unknown; new: unknown }> = {}
+        if (editMachine.machine_name !== payload.machine_name) changedFields.machine_name = { old: editMachine.machine_name, new: payload.machine_name }
+        if (editMachine.tid !== payload.tid) changedFields.tid = { old: editMachine.tid, new: payload.tid }
+        if (editMachine.account_name !== payload.account_name) changedFields.account_name = { old: editMachine.account_name, new: payload.account_name }
+        if (editMachine.machine_type !== payload.machine_type) changedFields.machine_type = { old: editMachine.machine_type, new: payload.machine_type }
+        if (editMachine.agent_code !== payload.agent_code) changedFields.agent_code = { old: editMachine.agent_code, new: payload.agent_code }
+        if (editMachine.bank_commission_pct !== payload.bank_commission_pct) changedFields.bank_commission_pct = { old: editMachine.bank_commission_pct, new: payload.bank_commission_pct }
+        if (editMachine.status !== payload.status) changedFields.status = { old: editMachine.status, new: payload.status }
+        logAction({
+          action: 'Machine Updated',
+          module: 'Swipe Machines',
+          details: { machine_name: payload.machine_name, changed_fields: changedFields },
+        })
+      }
     } else {
       const { error } = await supabase.from('swipe_machines').insert(payload)
       if (error) showToast('Insert failed: ' + error.message, 'error')
-      else { showToast('Machine added'); setShowPanel(false); fetchMachines() }
+      else {
+        showToast('Machine added'); setShowPanel(false); fetchMachines()
+        logAction({
+          action: 'Machine Added',
+          module: 'Swipe Machines',
+          details: {
+            machine_name: payload.machine_name,
+            tid: payload.tid,
+            account: payload.account_name,
+            bank_commission_pct: payload.bank_commission_pct,
+          },
+        })
+      }
     }
     setSaving(false)
   }
@@ -141,7 +169,15 @@ export default function MachinesPage() {
     const newStatus = m.status === 'Active' ? 'Blocked' : 'Active'
     const { error } = await supabase.from('swipe_machines').update({ status: newStatus }).eq('id', m.id)
     if (error) showToast('Failed: ' + error.message, 'error')
-    else { showToast(`${m.machine_name} ${newStatus === 'Blocked' ? 'blocked' : 'activated'}`); setConfirmBlock(null); fetchMachines() }
+    else {
+      showToast(`${m.machine_name} ${newStatus === 'Blocked' ? 'blocked' : 'activated'}`)
+      setConfirmBlock(null); fetchMachines()
+      logAction({
+        action: newStatus === 'Blocked' ? 'Machine Blocked' : 'Machine Activated',
+        module: 'Swipe Machines',
+        details: { machine_name: m.machine_name, tid: m.tid },
+      })
+    }
   }
 
   const filtered = machines.filter(m =>

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import { logAction } from '@/lib/audit-log'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -23,9 +24,20 @@ export default function LoginPage() {
     if (authError) {
       setError(authError.message)
       setLoading(false)
+      await logAction({
+        action: 'Login Failed',
+        module: 'Auth',
+        details: { email, reason: 'Invalid credentials', timestamp: new Date().toISOString() },
+      })
       return
     }
 
+    await logAction({
+      action: 'Login',
+      module: 'Auth',
+      details: { email, timestamp: new Date().toISOString() },
+    })
+    sessionStorage.removeItem('reminders_shown_date')
     router.push('/dashboard')
     router.refresh()
   }

@@ -1,9 +1,13 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { Download, Search, X, Check, ChevronDown } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { Transaction, Customer, Card } from '@/types/database'
+import { logAction } from '@/lib/audit-log'
+import { runRiskDetection } from '@/lib/risk-engine'
+import { updateAcSheetFromTransaction } from '@/lib/ac-sheet'
 
 const ACCOUNT_OPTIONS = [
   'KTC INDUS', 'MAP IND', 'RT IND', 'BGM IND', 'SKT INDUS', 'MAP INDUS',
@@ -52,7 +56,11 @@ function remarksBadgeStyle(r: string): { background: string; color: string } {
   return map[r] || { background: '#f3f4f6', color: '#374151' }
 }
 
-export default function EntryPage() {
+function EntryPageInner() {
+  const searchParams = useSearchParams()
+  const prefillCustomerId = searchParams.get('customer_id')
+  const prefillCustomerName = searchParams.get('customer_name')
+
   const today = new Date().toISOString().split('T')[0]
 
   const [nextSrNo, setNextSrNo] = useState<number>(6752)
@@ -107,6 +115,22 @@ export default function EntryPage() {
       if (data && data.length > 0) setMachineNames(data.map((m: { machine_name: string }) => m.machine_name))
     })
   }, [])
+
+  // ── Prefill customer from URL params (coming from Reminders) ──
+  useEffect(() => {
+    if (!prefillCustomerId) return
+    supabase
+      .from('customers')
+      .select('id, name, phone, default_charge_pct, outstanding_balance, cards(*)')
+      .eq('id', prefillCustomerId)
+      .single()
+      .then(({ data }) => {
+        if (data) {
+          selectCustomer(data as Customer)
+        }
+      })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillCustomerId])
 
   // ── Fetch next SR_NO on mount ──
   useEffect(() => {
@@ -373,10 +397,33 @@ export default function EntryPage() {
       setToast({ msg: `Entry saved — SR No: ${data?.sr_no ?? ''}`, type: 'success' })
       setNextSrNo(n => n + 1)
       resetForm()
+      logAction({
+        action: 'Transaction Created',
+        module: 'Daily Register',
+        details: {
+          sr_no: data?.sr_no,
+          customer_name: data?.customer_name,
+          bank_card: data?.bank_card,
+          total_amount: data?.total_amount,
+          paid_amount: data?.paid_amount,
+          account_name: data?.account_name,
+          swap_amount: data?.swap_amount,
+          swap_name: data?.swap_name,
+          remarks: data?.remarks,
+          commission_pct: data?.commission_pct,
+          date: data?.date,
+        },
+      })
       fetchTodayEntries()
       if (data) {
         createCCSheetRow(data)
         createCustomerSheetRow({ ...(data as Record<string, unknown>), customer_id: selectedCustomer?.id || null })
+        updateAcSheetFromTransaction({
+          date: data.date,
+          account_name: data.account_name,
+          total_amount: data.total_amount,
+        }).catch(err => console.error('[AC Sheet] update error:', err))
+        runRiskDetection().catch(() => {}) // fire-and-forget
       }
     }
     setSubmitting(false)
@@ -883,5 +930,13 @@ export default function EntryPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function EntryPage() {
+  return (
+    <Suspense fallback={null}>
+      <EntryPageInner />
+    </Suspense>
   )
 }
