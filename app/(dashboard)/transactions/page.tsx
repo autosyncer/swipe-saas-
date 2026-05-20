@@ -1,9 +1,14 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Download, RefreshCw, X } from 'lucide-react'
+import { Download, RefreshCw, X, Printer } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { Transaction } from '@/types/database'
+import dynamic from 'next/dynamic'
+import { transactionToReceiptProps } from '@/components/receipt/useReceiptData'
+import type { PaymentReceiptProps } from '@/components/receipt/PaymentReceipt'
+
+const PaymentReceiptModal = dynamic(() => import('@/components/receipt/PaymentReceiptModal'), { ssr: false })
 
 const ACCOUNTS = ['All', 'NSS', 'SKT', 'RT', 'KTC', 'TAP', 'BGM', 'NTC', 'MAHA', 'MAL', 'MAP', 'HASTI', 'MGS', 'MNS', 'TAPI', 'FDRL', 'BOB', 'INDUS', 'YES', 'INSTA']
 
@@ -34,6 +39,7 @@ export default function TransactionsPage() {
   const [txns, setTxns] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(false)
   const [selected, setSelected] = useState<Transaction | null>(null)
+  const [receiptData, setReceiptData] = useState<PaymentReceiptProps | null>(null)
 
   const fetchTxns = useCallback(async () => {
     setLoading(true)
@@ -97,6 +103,24 @@ export default function TransactionsPage() {
           onChange={e => setSearch(e.target.value)}
         />
         <div className="flex-1" />
+        <button
+          className="flex items-center gap-1 px-3 py-1.5 rounded-md border text-sm"
+          style={{ borderColor: '#e5e7eb' }}
+          onClick={async () => {
+            const { default: A4 } = await import('@/components/receipt/PaymentReceiptA4')
+            const { createRoot } = await import('react-dom/client')
+            const { createElement } = await import('react')
+            const win = window.open('', '_blank', 'width=900,height=700')
+            if (!win) return
+            const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style')).map(el => el.outerHTML).join('\n')
+            win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">${styles}</head><body style="margin:0;padding:0;background:#fff"></body></html>`)
+            win.document.close()
+            createRoot(win.document.body).render(createElement(A4, { transactions: txns.slice(0, 4).map(t => transactionToReceiptProps(t)) }))
+            setTimeout(() => { win.focus(); win.print(); win.close() }, 600)
+          }}
+        >
+          <Printer size={14} /> Print 4
+        </button>
         <button className="flex items-center gap-1 px-3 py-1.5 rounded-md border text-sm" style={{ borderColor: '#e5e7eb' }}>
           <Download size={14} /> Export
         </button>
@@ -113,7 +137,7 @@ export default function TransactionsPage() {
           <table className="w-full text-sm">
             <thead className="bg-[#f9f9f9]">
               <tr>
-                {['SR', 'Date', 'Customer', 'Bank Card', 'Total Amt', 'Paid Amt', 'A/C Name', 'Swap Amt', 'Swap Name', 'Diff', 'Remarks'].map(h => (
+                {['SR', 'Date', 'Customer', 'Bank Card', 'Total Amt', 'Paid Amt', 'A/C Name', 'Swap Amt', 'Swap Name', 'Diff', 'Remarks', ''].map(h => (
                   <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-[#6b7280] uppercase border-b border-[#e5e7eb] whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -136,12 +160,26 @@ export default function TransactionsPage() {
                     {t.difference != null ? `₹${t.difference.toLocaleString('en-IN')}` : '—'}
                   </td>
                   <td className="px-3 py-2.5"><StatusBadge status={t.remarks} /></td>
+                  <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
+                    <button
+                      className="flex items-center gap-1 px-2 py-1 rounded text-xs border border-[#e5e7eb] hover:bg-gray-50 whitespace-nowrap"
+                      onClick={() => setReceiptData(transactionToReceiptProps(t))}
+                    >
+                      <Printer size={11} /> Receipt
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
+
+      {/* Receipt modal — single transaction */}
+      {receiptData && (
+        <PaymentReceiptModal receiptData={receiptData} onClose={() => setReceiptData(null)} />
+      )}
+
 
       {/* Detail panel */}
       {selected && (

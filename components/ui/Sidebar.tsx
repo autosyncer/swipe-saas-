@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
   Home, LayoutGrid, Terminal, Users, CreditCard, Monitor,
-  FileText, Bell, AlertTriangle, BarChart2, List, Grid, Settings
+  FileText, Bell, AlertTriangle, BarChart2, List, Grid, Settings, Landmark, Package, Receipt, Workflow
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import { createClient } from '@/lib/supabase/client'
@@ -15,12 +15,16 @@ const navGroups = [
     { icon: Home, label: 'Dashboard', href: '/dashboard', superOnly: false },
     { icon: LayoutGrid, label: 'Sheet Editor', href: '/sheets', superOnly: false },
     { icon: Terminal, label: 'New Entry', href: '/entry', superOnly: false },
+    { icon: Workflow, label: 'Field Mapping', href: '/mapping', superOnly: false },
   ],
   [
     { icon: Users, label: 'Customers', href: '/customers', superOnly: false },
     { icon: CreditCard, label: 'Transactions', href: '/transactions', superOnly: false },
     { icon: Monitor, label: 'Swipe Machines', href: '/machines', superOnly: false },
+    { icon: Landmark, label: 'Bank Accounts', href: '/bank-accounts', superOnly: false },
     { icon: FileText, label: 'Reports', href: '/reports', superOnly: false },
+    { icon: Package, label: 'Commodities', href: '/commodities', superOnly: false },
+    { icon: Receipt, label: 'Invoices', href: '/invoices', superOnly: false },
   ],
   [
     { icon: Bell, label: 'Reminders', href: '/reminders', superOnly: false },

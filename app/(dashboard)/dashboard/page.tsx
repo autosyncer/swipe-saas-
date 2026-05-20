@@ -6,6 +6,7 @@ import { CheckCircle, Download, TrendingUp, RefreshCw, X, Search, Loader2 } from
 import { supabase } from '@/lib/supabase'
 import { createClient } from '@/lib/supabase/client'
 import { Transaction } from '@/types/database'
+import { BackupStatusWidget } from '@/components/backup/BackupStatusWidget'
 
 const chartData = [
   { v: 38000 }, { v: 42000 }, { v: 51000 }, { v: 47000 },
@@ -14,6 +15,8 @@ const chartData = [
 const commData = [{ v: 1140 }, { v: 1260 }, { v: 1530 }, { v: 1410 }, { v: 1650 }, { v: 1440 }, { v: 1830 }, { v: 1740 }]
 const pendData = [{ v: 3200 }, { v: 3800 }, { v: 2900 }, { v: 4100 }, { v: 3500 }, { v: 2800 }, { v: 3900 }, { v: 3200 }]
 const txnData = [{ v: 2 }, { v: 3 }, { v: 4 }, { v: 3 }, { v: 5 }, { v: 3 }, { v: 6 }, { v: 5 }]
+const avgCommData = [{ v: 2.1 }, { v: 2.2 }, { v: 2.3 }, { v: 2.0 }, { v: 2.4 }, { v: 2.2 }, { v: 2.1 }, { v: 2.3 }]
+const defCommData = [{ v: 500 }, { v: 800 }, { v: 300 }, { v: 1200 }, { v: 600 }, { v: 900 }, { v: 400 }, { v: 700 }]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -222,12 +225,14 @@ interface DashMetrics {
   commissionToday: number
   pendingCollections: number
   transactionsToday: number
+  avgCommPct: number
+  deferredComm: number
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const [metrics, setMetrics] = useState<DashMetrics>({ totalSwiped: 0, commissionToday: 0, pendingCollections: 0, transactionsToday: 0 })
+  const [metrics, setMetrics] = useState<DashMetrics>({ totalSwiped: 0, commissionToday: 0, pendingCollections: 0, transactionsToday: 0, avgCommPct: 0, deferredComm: 0 })
   const [recentTxns, setRecentTxns] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -243,17 +248,20 @@ export default function DashboardPage() {
     const today = new Date().toISOString().split('T')[0]
 
     const [{ data: todayTxns }, { data: recent }] = await Promise.all([
-      supabase.from('transactions').select('total_amount, paid_amount, swap_amount, remarks').eq('date', today),
+      supabase.from('transactions').select('total_amount, paid_amount, swap_amount, remarks, commission_pct, commission_type, commission_amount').eq('date', today),
       supabase.from('transactions').select('*').order('sr_no', { ascending: false }).limit(10),
     ])
 
-    const txns = (todayTxns as Pick<Transaction, 'total_amount' | 'paid_amount' | 'swap_amount' | 'remarks'>[]) || []
+    const txns = (todayTxns as (Pick<Transaction, 'total_amount' | 'paid_amount' | 'swap_amount' | 'remarks'> & { commission_pct?: number; commission_type?: string; commission_amount?: number })[]) || []
     const totalSwiped = txns.reduce((s, t) => s + (t.total_amount || 0), 0)
     const commissionToday = txns.reduce((s, t) => s + ((t.swap_amount || 0) - (t.paid_amount || 0)), 0)
     const pendingCollections = txns.filter(t => t.remarks !== 'Paid').reduce((s, t) => s + (t.swap_amount || 0), 0)
     const transactionsToday = txns.length
+    const withComm = txns.filter(t => t.commission_pct && t.commission_pct > 0)
+    const avgCommPct = withComm.length > 0 ? withComm.reduce((s, t) => s + (t.commission_pct || 0), 0) / withComm.length : 0
+    const deferredComm = txns.filter(t => t.commission_type === 'Deferred').reduce((s, t) => s + (t.total_amount || 0) * ((t.commission_pct || 0) / 100), 0)
 
-    setMetrics({ totalSwiped, commissionToday, pendingCollections, transactionsToday })
+    setMetrics({ totalSwiped, commissionToday, pendingCollections, transactionsToday, avgCommPct, deferredComm })
     setRecentTxns((recent as Transaction[]) || [])
     setLoading(false)
   }, [])
@@ -692,11 +700,20 @@ export default function DashboardPage() {
       </div>
 
       {/* Metric chart cards */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-3 gap-4 mb-3">
         <MetricCard label="Total Swiped Today" value={fmt(metrics.totalSwiped)} data={chartData} timeLabel="Last 8 days (sparkline)" loading={loading} />
         <MetricCard label="Commission Today" value={fmt(metrics.commissionToday)} data={commData} timeLabel="Last 8 days (sparkline)" loading={loading} />
         <MetricCard label="Pending Collections" value={fmt(metrics.pendingCollections)} data={pendData} timeLabel="Last 8 days (sparkline)" loading={loading} />
+      </div>
+      <div className="grid grid-cols-3 gap-4 mb-6">
         <MetricCard label="Transactions Today" value={String(metrics.transactionsToday)} data={txnData} timeLabel="Last 8 days (sparkline)" loading={loading} />
+        <MetricCard label="Avg Commission %" value={loading ? '—' : metrics.avgCommPct.toFixed(2) + '%'} data={avgCommData} timeLabel="Today's entries" loading={loading} />
+        <MetricCard label="Deferred Commission" value={fmt(Math.round(metrics.deferredComm))} data={defCommData} timeLabel="Today — collect later" loading={loading} />
+      </div>
+
+      {/* Backup Status */}
+      <div className="mb-4">
+        <BackupStatusWidget />
       </div>
 
       {/* Bottom 2 cards */}

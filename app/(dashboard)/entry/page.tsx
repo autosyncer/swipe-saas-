@@ -1,13 +1,14 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
-import { Download, Search, X, Check, ChevronDown } from 'lucide-react'
+import { useSearchParams, useRouter } from 'next/navigation'
+import { Download, Search, X, Check, ChevronDown, Bell, Package, Plus, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { Transaction, Customer, Card } from '@/types/database'
 import { logAction } from '@/lib/audit-log'
 import { runRiskDetection } from '@/lib/risk-engine'
 import { updateAcSheetFromTransaction } from '@/lib/ac-sheet'
+import { saveTransactionToStorage } from '@/lib/transaction-backup'
 
 const ACCOUNT_OPTIONS = [
   'KTC INDUS', 'MAP IND', 'RT IND', 'BGM IND', 'SKT INDUS', 'MAP INDUS',
@@ -65,6 +66,8 @@ function EntryPageInner() {
 
   const [nextSrNo, setNextSrNo] = useState<number>(6752)
   const [commPct, setCommPct] = useState<string>(DEFAULT_COMM.toString())
+  const [commType, setCommType] = useState<string>('Inclusive')
+  const [commAutoSource, setCommAutoSource] = useState<string | null>(null) // account name that auto-filled commission
   const [form, setForm] = useState({
     customerName: '',
     bankCard: '',
@@ -105,6 +108,21 @@ function EntryPageInner() {
   const [todayEntries, setTodayEntries] = useState<Transaction[]>([])
   const [loadingEntries, setLoadingEntries] = useState(false)
 
+  // Commodity calculator + invoice
+  const router = useRouter()
+  const [showCommodities, setShowCommodities] = useState(false)
+  const [availableCommodities, setAvailableCommodities] = useState<{ id: string; name: string; unit: string; current_price: number }[]>([])
+  const [commodityItems, setCommodityItems] = useState<{ commodity_id: string; name: string; unit: string; qty: number; price: number; subtotal: number }[]>([])
+  const [generatedInvoice, setGeneratedInvoice] = useState<{ invoice_number: string; customer_name: string; total_amount: number; items: { name: string; unit: string; qty: number; subtotal: number }[] } | null>(null)
+  const [generatingInvoice, setGeneratingInvoice] = useState(false)
+
+  // Reminder
+  const [showReminder, setShowReminder] = useState(false)
+  const [reminderDate, setReminderDate] = useState('')
+  const [reminderTime, setReminderTime] = useState('09:00')
+  const [reminderType, setReminderType] = useState('payment')
+  const [reminderNotes, setReminderNotes] = useState('')
+
   // Toast
   const [submitting, setSubmitting] = useState(false)
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
@@ -113,6 +131,13 @@ function EntryPageInner() {
   useEffect(() => {
     supabase.from('swipe_machines').select('machine_name').eq('status', 'Active').then(({ data }) => {
       if (data && data.length > 0) setMachineNames(data.map((m: { machine_name: string }) => m.machine_name))
+    })
+  }, [])
+
+  // ── Load active commodities ──
+  useEffect(() => {
+    supabase.from('commodities').select('id, name, unit, current_price').eq('is_active', true).order('name').then(({ data }) => {
+      setAvailableCommodities(data ?? [])
     })
   }, [])
 
@@ -194,18 +219,23 @@ function EntryPageInner() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // ── Recalculate paid/swap when totalAmount OR commPct changes ──
+  // ── Recalculate paid/swap when totalAmount, commPct, or commType changes ──
   useEffect(() => {
     const total = parseFloat(form.totalAmount)
     const comm = parseFloat(commPct) || DEFAULT_COMM
     if (!total || isNaN(total)) return
+    const commAmt = Math.round(total * comm / 100)
+    // Inclusive: swapAmount = total + commission (customer pays more)
+    // Exclusive: swapAmount = total (commission collected separately in cash)
+    // Deferred:  swapAmount = total (commission not collected now)
+    const swap = commType === 'Inclusive' ? total + commAmt : total
     setForm(f => ({
       ...f,
       paidAmount: total.toString(),
-      swapAmount: Math.round(total + (total * comm / 100)).toString(),
+      swapAmount: Math.round(swap).toString(),
     }))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.totalAmount, commPct])
+  }, [form.totalAmount, commPct, commType])
 
   // ── Select a customer from autocomplete ──
   async function selectCustomer(c: Customer) {
@@ -229,7 +259,20 @@ function EntryPageInner() {
     } else {
       console.log('[cards] fetched:', data)
     }
-    setCustomerCards((data as Card[]) || [])
+    const cards = (data as Card[]) || []
+    setCustomerCards(cards)
+
+    // Auto-fill reminder
+    const cardWithDue = cards.find(card => card.due_date)
+    if (cardWithDue && cardWithDue.due_date) {
+      setReminderDate(cardWithDue.due_date)
+      setReminderType('card_due')
+    } else {
+      const d = new Date()
+      d.setDate(d.getDate() + 7)
+      setReminderDate(d.toISOString().split('T')[0])
+      setReminderType('payment')
+    }
   }
 
   function selectCard(c: Card) {
@@ -238,13 +281,24 @@ function EntryPageInner() {
     setCustomBankCard(false)
   }
 
-  function toggleAccount(opt: string) {
-    setForm(f => ({
-      ...f,
-      accountNames: f.accountNames.includes(opt)
-        ? f.accountNames.filter(a => a !== opt)
-        : [...f.accountNames, opt],
-    }))
+  async function toggleAccount(opt: string) {
+    const next = form.accountNames.includes(opt)
+      ? form.accountNames.filter(a => a !== opt)
+      : [...form.accountNames, opt]
+    setForm(f => ({ ...f, accountNames: next }))
+
+    // Auto-set commission from first selected account
+    if (next.length > 0) {
+      const firstAcct = next[0].split(' ')[0]
+      const { data } = await supabase.from('bank_account_master').select('commission_pct, commission_type, account_name').ilike('account_name', `%${firstAcct}%`).limit(1)
+      if (data && data.length > 0 && Number(data[0].commission_pct) > 0) {
+        setCommPct(String(data[0].commission_pct))
+        if (data[0].commission_type) setCommType(data[0].commission_type as string)
+        setCommAutoSource(data[0].account_name as string)
+      }
+    } else {
+      setCommAutoSource(null)
+    }
   }
 
   function addCustomAccount() {
@@ -266,6 +320,8 @@ function EntryPageInner() {
 
   function resetForm() {
     setForm({ customerName: '', bankCard: '', totalAmount: '', paidAmount: '', accountNames: [], swapAmount: '', swapNames: [], difference: '', remarks: 'PAID' })
+    setCommAutoSource(null)
+    setCommType('Inclusive')
     setCustSearch('')
     setSelectedCustomer(null)
     setCustomerCards([])
@@ -274,6 +330,15 @@ function EntryPageInner() {
     setCommPct(DEFAULT_COMM.toString())
     setSwapInput('')
     setAcctCustomInput('')
+    setShowReminder(false)
+    setReminderDate('')
+    setReminderTime('09:00')
+    setReminderType('payment')
+    setReminderNotes('')
+    setShowCommodities(false)
+    setCommodityItems([])
+    setGeneratedInvoice(null)
+    setGeneratingInvoice(false)
   }
 
   async function createCCSheetRow(transaction: Record<string, unknown>) {
@@ -363,6 +428,94 @@ function EntryPageInner() {
     }
   }
 
+  async function generateInvoice(
+    transaction: Record<string, unknown>,
+    items: { commodity_id: string; name: string; unit: string; qty: number; price: number; subtotal: number }[]
+  ) {
+    const validItems = items.filter(i => i.name && i.qty > 0)
+    if (validItems.length === 0) {
+      console.log('[invoice] no valid items, skipping')
+      return null
+    }
+
+    console.log('[invoice] generateInvoice called', { transaction, items: validItems })
+    setGeneratingInvoice(true)
+
+    try {
+      // Step 1: Generate invoice number
+      console.log('[invoice] calling generate_invoice_number RPC')
+      const { data: invoiceNum, error: numError } = await supabase.rpc('generate_invoice_number')
+      console.log('[invoice] invoice number:', invoiceNum, 'error:', numError)
+      if (numError) {
+        console.error('[invoice] RPC error:', numError)
+        setToast({ msg: `Invoice number error: ${numError.message}`, type: 'error' })
+        return null
+      }
+
+      // Step 2: Check invoices table accessible
+      const { data: tableCheck, error: tableErr } = await supabase.from('invoices').select('id').limit(1)
+      console.log('[invoice] table check:', tableCheck, tableErr)
+      if (tableErr) {
+        console.error('[invoice] invoices table error:', tableErr)
+        setToast({ msg: `Invoices table error: ${tableErr.message}. Run commodities_invoices.sql first.`, type: 'error' })
+        return null
+      }
+
+      // Step 3: Build insert payload matching actual schema
+      const subtotal = validItems.reduce((s, i) => s + i.subtotal, 0)
+      const insertPayload = {
+        invoice_number: invoiceNum as string,
+        transaction_id: (transaction.id as string) || null,
+        customer_id: (transaction.customer_id as string) || null,
+        customer_name: (transaction.customer_name as string) || '',
+        items: validItems.map(i => ({
+          commodity_id: i.commodity_id,
+          name: i.name,
+          unit: i.unit,
+          qty: i.qty,
+          price: i.price,
+          subtotal: i.subtotal,
+        })),
+        subtotal,
+        tax_percent: 0,
+        tax_amount: 0,
+        total_amount: subtotal,
+        notes: `Auto-generated from SR #${transaction.sr_no}`,
+        status: 'draft',
+      }
+      console.log('[invoice] inserting:', insertPayload)
+
+      const { data: invoice, error: insertError } = await supabase
+        .from('invoices')
+        .insert(insertPayload)
+        .select()
+        .single()
+
+      console.log('[invoice] insert result:', invoice, 'error:', insertError)
+
+      if (insertError) {
+        console.error('[invoice] insert error:', insertError)
+        setToast({ msg: `Invoice failed: ${insertError.message}`, type: 'error' })
+        return null
+      }
+
+      // Step 4: Link invoice back to transaction
+      if (invoice && transaction.id) {
+        await supabase
+          .from('transactions')
+          .update({ invoice_id: invoice.id })
+          .eq('id', transaction.id as string)
+        console.log('[invoice] linked to transaction', transaction.id)
+      }
+
+      logAction({ action: 'generate_invoice', module: 'Invoices', details: { invoice_number: invoice.invoice_number, sr_no: transaction.sr_no } })
+      console.log('[invoice] success:', invoice.invoice_number)
+      return invoice
+    } finally {
+      setGeneratingInvoice(false)
+    }
+  }
+
   async function handleSubmit() {
     if (!form.customerName || !form.totalAmount) {
       setToast({ msg: 'Customer name and total amount are required', type: 'error' })
@@ -372,6 +525,7 @@ function EntryPageInner() {
     setSubmitting(true)
     const total = parseFloat(form.totalAmount) || 0
     const comm = parseFloat(commPct) || DEFAULT_COMM
+    const commAmt = commType === 'Deferred' ? 0 : Math.round(total * comm / 100)
     const payload = {
       date: today,
       customer_name: form.customerName.trim(),
@@ -385,7 +539,11 @@ function EntryPageInner() {
       remarks: form.remarks,
       status: ({PAID:'Paid',PEND:'Pending',PURU:'Puru',UNPAID:'Unpaid',SE:'Paid',CANCEL:'Cancelled'} as Record<string,string>)[form.remarks] || 'Pending',
       commission_pct: comm,
-      commission_amount: Math.round(total * comm / 100),
+      commission_amount: commAmt,
+      commission_type: commType,
+      commodity_items: commodityItems.filter(i => i.name && i.qty > 0).length > 0
+        ? commodityItems.filter(i => i.name && i.qty > 0)
+        : [],
     }
     console.log('[entry] submit payload:', payload)
     const { data, error } = await supabase.from('transactions').insert(payload).select().single()
@@ -394,7 +552,20 @@ function EntryPageInner() {
     if (error) {
       setToast({ msg: `Error: ${error.message}`, type: 'error' })
     } else {
-      setToast({ msg: `Entry saved — SR No: ${data?.sr_no ?? ''}`, type: 'success' })
+      const newTransaction = data
+      // Capture before resetForm clears state
+      const snapCustomerName = form.customerName
+      const snapBankCard = form.bankCard
+      const snapTotalAmount = form.totalAmount
+      const snapCustomer = selectedCustomer
+      const snapShowReminder = showReminder
+      const snapReminderDate = reminderDate
+      const snapReminderTime = reminderTime
+      const snapReminderType = reminderType
+      const snapReminderNotes = reminderNotes
+      const snapShowCommodities = showCommodities
+      const snapCommodityItems = [...commodityItems]
+
       setNextSrNo(n => n + 1)
       resetForm()
       logAction({
@@ -415,19 +586,60 @@ function EntryPageInner() {
         },
       })
       fetchTodayEntries()
-      if (data) {
-        createCCSheetRow(data)
-        createCustomerSheetRow({ ...(data as Record<string, unknown>), customer_id: selectedCustomer?.id || null })
+      if (newTransaction) {
+        createCCSheetRow(newTransaction)
+        createCustomerSheetRow({ ...(newTransaction as Record<string, unknown>), customer_id: snapCustomer?.id || null })
         updateAcSheetFromTransaction({
-          date: data.date,
-          account_name: data.account_name,
-          total_amount: data.total_amount,
+          date: newTransaction.date,
+          account_name: newTransaction.account_name,
+          total_amount: newTransaction.total_amount,
         }).catch(err => console.error('[AC Sheet] update error:', err))
-        runRiskDetection().catch(() => {}) // fire-and-forget
+        runRiskDetection().catch(() => {})
+        saveTransactionToStorage(newTransaction).catch(() => {})
       }
+
+      // Reminder
+      let reminderSaved = false
+      if (snapShowReminder && snapReminderDate) {
+        const titleMap: Record<string, string> = {
+          payment: `Collect payment — ${snapCustomerName}`,
+          card_due: `Card due — ${snapCustomerName}`,
+          follow_up: `Follow up — ${snapCustomerName}`,
+          custom: `Reminder — ${snapCustomerName}`,
+        }
+        const { error: remErr } = await supabase.from('reminders').insert({
+          title: titleMap[snapReminderType] || `Reminder — ${snapCustomerName}`,
+          description: snapReminderNotes || `Entry SR #${newTransaction?.sr_no} — ₹${snapTotalAmount}`,
+          reminder_date: snapReminderDate,
+          reminder_time: snapReminderTime || '09:00:00',
+          type: snapReminderType,
+          customer_id: snapCustomer?.id || null,
+          customer_name: snapCustomerName || '',
+          bank_name: snapBankCard || '',
+          amount: parseFloat(snapTotalAmount) || 0,
+          status: 'pending',
+          phone: snapCustomer?.phone || '',
+        })
+        if (!remErr) reminderSaved = true
+        else console.error('Reminder save error:', remErr)
+      }
+
+      // Invoice generation
+      let invoiceResult = null
+      if (snapShowCommodities && snapCommodityItems.some(i => i.name && i.qty > 0)) {
+        const txWithCustomer = { ...newTransaction, customer_id: snapCustomer?.id || null }
+        invoiceResult = await generateInvoice(txWithCustomer as Record<string, unknown>, snapCommodityItems)
+        if (invoiceResult) setGeneratedInvoice(invoiceResult)
+      }
+
+      // Final toast
+      const parts = [`Entry saved — SR #${newTransaction?.sr_no}`]
+      if (reminderSaved) parts.push('Reminder set!')
+      if (invoiceResult) parts.push(`Invoice ${invoiceResult.invoice_number} generated!`)
+      setToast({ msg: parts.join(' + '), type: 'success' })
     }
     setSubmitting(false)
-    setTimeout(() => setToast(null), 4000)
+    setTimeout(() => setToast(null), 5000)
   }
 
   async function exportXlsx() {
@@ -619,23 +831,51 @@ function EntryPageInner() {
           )}
         </div>
 
-        {/* 4. Commission % */}
-        <div>
-          <label className={labelCls}>
-            Commission %
-            <span className="text-[10px] text-[#9ca3af] ml-1 font-normal">
-              {selectedCustomer ? `(from customer: ${selectedCustomer.default_charge_pct}%)` : '(default 2.20)'}
-            </span>
-          </label>
-          <input
-            type="number"
-            step="0.01"
-            className={inputCls}
-            style={{ borderColor: '#e5e7eb' }}
-            value={commPct}
-            onChange={e => setCommPct(e.target.value)}
-            placeholder="2.20"
-          />
+        {/* 4. Commission % + Type */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={labelCls}>
+              Commission %
+              <span className="text-[10px] ml-1 font-normal" style={{ color: commAutoSource ? '#3ECF8E' : '#9ca3af' }}>
+                {commAutoSource ? `auto-filled` : selectedCustomer ? `(from customer)` : '(default)'}
+              </span>
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              className={inputCls}
+              style={{ borderColor: '#e5e7eb' }}
+              value={commPct}
+              onChange={e => { setCommPct(e.target.value); setCommAutoSource(null) }}
+              placeholder="2.20"
+            />
+          </div>
+          <div>
+            <label className={labelCls}>
+              Commission Type
+              {commAutoSource && <span className="text-[10px] ml-1 font-normal" style={{ color: '#3ECF8E' }}>auto-filled</span>}
+            </label>
+            <select
+              className={`${inputCls} bg-white`}
+              style={{ borderColor: '#e5e7eb' }}
+              value={commType}
+              onChange={e => setCommType(e.target.value)}
+            >
+              <option value="Inclusive">Inclusive</option>
+              <option value="Exclusive">Exclusive</option>
+              <option value="Deferred">Deferred</option>
+            </select>
+          </div>
+        </div>
+        {/* Commission note */}
+        <div className="rounded-md px-3 py-2 text-xs" style={{
+          background: commType === 'Inclusive' ? '#f0fdf4' : commType === 'Exclusive' ? '#eff6ff' : '#fefce8',
+          color: commType === 'Inclusive' ? '#065f46' : commType === 'Exclusive' ? '#1e40af' : '#854d0e',
+          border: `1px solid ${commType === 'Inclusive' ? '#bbf7d0' : commType === 'Exclusive' ? '#bfdbfe' : '#fde68a'}`,
+        }}>
+          {commType === 'Inclusive' && <>Swap Amount = Total + Commission — customer pays full amount including commission.</>}
+          {commType === 'Exclusive' && <>Swap Amount = Total only — commission collected separately in cash from customer.</>}
+          {commType === 'Deferred' && <>Swap Amount = Total only — commission not collected now; added to customer outstanding.</>}
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -844,7 +1084,264 @@ function EntryPageInner() {
           </select>
         </div>
 
-        {/* 12. Buttons */}
+        {/* 12. Commodity Calculator */}
+        <div>
+          <div
+            onClick={() => {
+              setShowCommodities(v => !v)
+              if (commodityItems.length === 0) {
+                setCommodityItems([{ commodity_id: '', name: '', unit: 'pcs', qty: 1, price: 0, subtotal: 0 }])
+              }
+            }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '8px',
+              cursor: 'pointer', padding: '8px 0',
+              color: '#6366f1', fontSize: '13px', fontWeight: '500',
+              borderTop: '1px solid #e5e7eb', marginTop: '4px',
+            }}
+          >
+            <Package size={16} />
+            {showCommodities ? '− Remove Commodity Items' : '+ Add Commodity Items'}
+          </div>
+
+          {showCommodities && (
+            <div style={{ background: '#f5f3ff', border: '1px solid #c4b5fd', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#4c1d95', marginBottom: '8px' }}>
+                📦 Commodity Calculator
+              </div>
+              <table style={{ width: '100%', fontSize: '12px', marginBottom: '8px' }}>
+                <thead>
+                  <tr style={{ color: '#6b7280' }}>
+                    <th style={{ textAlign: 'left', paddingBottom: '4px', fontWeight: 500 }}>Item</th>
+                    <th style={{ textAlign: 'right', paddingBottom: '4px', fontWeight: 500, width: '50px' }}>Qty</th>
+                    <th style={{ textAlign: 'right', paddingBottom: '4px', fontWeight: 500, width: '70px' }}>Price</th>
+                    <th style={{ textAlign: 'right', paddingBottom: '4px', fontWeight: 500, width: '70px' }}>Total</th>
+                    <th style={{ width: '20px' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {commodityItems.map((item, i) => (
+                    <tr key={i}>
+                      <td style={{ paddingRight: '4px', paddingBottom: '4px' }}>
+                        <select
+                          value={item.commodity_id}
+                          onChange={e => {
+                            const c = availableCommodities.find(x => x.id === e.target.value)
+                            setCommodityItems(prev => {
+                              const next = [...prev]
+                              next[i] = { ...next[i], commodity_id: e.target.value, name: c?.name ?? '', unit: c?.unit ?? 'pcs', price: c?.current_price ?? 0, subtotal: (c?.current_price ?? 0) * next[i].qty }
+                              return next
+                            })
+                          }}
+                          style={{ width: '100%', border: '1px solid #ddd6fe', borderRadius: '4px', padding: '4px 6px', fontSize: '12px', background: 'white' }}
+                        >
+                          <option value="">Select...</option>
+                          {availableCommodities.map(c => <option key={c.id} value={c.id}>{c.name} ({c.unit})</option>)}
+                        </select>
+                      </td>
+                      <td style={{ paddingRight: '4px', paddingBottom: '4px' }}>
+                        <input
+                          type="number"
+                          value={item.qty}
+                          min={1}
+                          onChange={e => {
+                            const qty = parseFloat(e.target.value) || 0
+                            setCommodityItems(prev => {
+                              const next = [...prev]
+                              next[i] = { ...next[i], qty, subtotal: qty * next[i].price }
+                              return next
+                            })
+                          }}
+                          style={{ width: '100%', border: '1px solid #ddd6fe', borderRadius: '4px', padding: '4px 6px', fontSize: '12px', textAlign: 'right' }}
+                        />
+                      </td>
+                      <td style={{ paddingRight: '4px', paddingBottom: '4px' }}>
+                        <input
+                          type="number"
+                          value={item.price}
+                          min={0}
+                          onChange={e => {
+                            const price = parseFloat(e.target.value) || 0
+                            setCommodityItems(prev => {
+                              const next = [...prev]
+                              next[i] = { ...next[i], price, subtotal: price * next[i].qty }
+                              return next
+                            })
+                          }}
+                          style={{ width: '100%', border: '1px solid #ddd6fe', borderRadius: '4px', padding: '4px 6px', fontSize: '12px', textAlign: 'right' }}
+                        />
+                      </td>
+                      <td style={{ textAlign: 'right', paddingBottom: '4px', fontWeight: 600, color: '#4c1d95', paddingRight: '4px' }}>
+                        ₹{item.subtotal.toLocaleString('en-IN')}
+                      </td>
+                      <td style={{ paddingBottom: '4px' }}>
+                        {commodityItems.length > 1 && (
+                          <button onClick={() => setCommodityItems(prev => prev.filter((_, j) => j !== i))} style={{ color: '#ef4444', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}>
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setCommodityItems(prev => [...prev, { commodity_id: '', name: '', unit: 'pcs', qty: 1, price: 0, subtotal: 0 }])}
+                  style={{ fontSize: '12px', color: '#6366f1', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Plus size={12} /> Add Row
+                </button>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: '#4c1d95' }}>
+                  Total: ₹{commodityItems.reduce((s, r) => s + r.subtotal, 0).toLocaleString('en-IN')}
+                </div>
+              </div>
+              <p style={{ fontSize: '11px', color: '#7c3aed', marginTop: '4px' }}>
+                Invoice will be auto-generated on Submit if items are filled.
+              </p>
+            </div>
+          )}
+
+          {/* Generated invoice success card */}
+          {generatedInvoice && (
+            <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '8px', padding: '12px', marginTop: '8px' }}>
+              <div style={{ fontWeight: 'bold', color: '#166534', marginBottom: '6px', fontSize: '13px' }}>
+                ✅ Invoice Generated!
+              </div>
+              <div style={{ fontSize: '13px', color: '#374151', marginBottom: '2px' }}>
+                Invoice No: <strong>{generatedInvoice.invoice_number}</strong>
+              </div>
+              <div style={{ fontSize: '13px', color: '#374151', marginBottom: '2px' }}>
+                Customer: {generatedInvoice.customer_name}
+              </div>
+              {generatedInvoice.items.map((item, i) => (
+                <div key={i} style={{ fontSize: '12px', color: '#6b7280' }}>
+                  {item.name}: {item.qty} {item.unit} — ₹{Number(item.subtotal).toLocaleString('en-IN')}
+                </div>
+              ))}
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#166534', marginTop: '4px' }}>
+                Total: ₹{Number(generatedInvoice.total_amount).toLocaleString('en-IN')}
+              </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                <button
+                  onClick={() => router.push('/invoices')}
+                  style={{ background: '#3ECF8E', color: 'white', border: 'none', borderRadius: '4px', padding: '5px 12px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
+                >
+                  View Invoice →
+                </button>
+                <button
+                  onClick={() => setGeneratedInvoice(null)}
+                  style={{ background: 'none', color: '#9ca3af', border: '1px solid #d1d5db', borderRadius: '4px', padding: '5px 12px', cursor: 'pointer', fontSize: '12px' }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 13. Reminder */}
+        <div>
+          <div
+            onClick={() => setShowReminder(!showReminder)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '8px',
+              cursor: 'pointer', padding: '8px 0',
+              color: '#3ECF8E', fontSize: '13px', fontWeight: '500',
+              borderTop: '1px solid #e5e7eb', marginTop: '8px',
+            }}
+          >
+            <Bell size={16} />
+            {showReminder ? '− Remove Reminder' : '+ Add Reminder for this entry'}
+          </div>
+
+          {showReminder && (
+            <div style={{
+              background: '#f0fdf4', border: '1px solid #86efac',
+              borderRadius: '8px', padding: '12px', marginBottom: '8px',
+            }}>
+              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#166534', marginBottom: '8px' }}>
+                🔔 Set Reminder
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+                <div>
+                  <label style={{ fontSize: '11px', color: '#6b7280' }}>Reminder Date</label>
+                  <input
+                    type="date"
+                    value={reminderDate}
+                    onChange={e => setReminderDate(e.target.value)}
+                    min={new Date().toISOString().split('T')[0]}
+                    style={{ width: '100%', border: '1px solid #d1fae5', borderRadius: '6px', padding: '6px 8px', fontSize: '13px' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '11px', color: '#6b7280' }}>Time</label>
+                  <input
+                    type="time"
+                    value={reminderTime}
+                    onChange={e => setReminderTime(e.target.value)}
+                    style={{ width: '100%', border: '1px solid #d1fae5', borderRadius: '6px', padding: '6px 8px', fontSize: '13px' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: '8px' }}>
+                <label style={{ fontSize: '11px', color: '#6b7280' }}>Reminder Type</label>
+                <select
+                  value={reminderType}
+                  onChange={e => setReminderType(e.target.value)}
+                  style={{ width: '100%', border: '1px solid #d1fae5', borderRadius: '6px', padding: '6px 8px', fontSize: '13px' }}
+                >
+                  <option value="payment">💰 Payment Collection</option>
+                  <option value="follow_up">📞 Follow Up</option>
+                  <option value="card_due">💳 Card Due</option>
+                  <option value="custom">⭐ Custom</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '11px', color: '#6b7280' }}>Notes (optional)</label>
+                <input
+                  type="text"
+                  value={reminderNotes}
+                  onChange={e => setReminderNotes(e.target.value)}
+                  placeholder="e.g. Collect commission, Follow up on payment..."
+                  style={{ width: '100%', border: '1px solid #d1fae5', borderRadius: '6px', padding: '6px 8px', fontSize: '13px' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
+                {[
+                  { label: 'Tomorrow', days: 1 },
+                  { label: '+3 Days', days: 3 },
+                  { label: '+7 Days', days: 7 },
+                  { label: '+15 Days', days: 15 },
+                ].map(({ label, days }) => (
+                  <button
+                    key={days}
+                    type="button"
+                    onClick={() => {
+                      const d = new Date()
+                      d.setDate(d.getDate() + days)
+                      setReminderDate(d.toISOString().split('T')[0])
+                    }}
+                    style={{
+                      background: 'white', border: '1px solid #86efac',
+                      borderRadius: '4px', padding: '3px 8px',
+                      fontSize: '11px', cursor: 'pointer', color: '#166534',
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 14. Buttons */}
         <div className="flex gap-2 mt-1">
           <button
             type="button"

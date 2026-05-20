@@ -12,3 +12,6 @@ yarn-debug.log*
 .DS_Store
 *.pem
 .vercel
+
+# OneDrive conflict prevention
+

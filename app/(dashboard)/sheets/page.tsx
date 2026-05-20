@@ -4,12 +4,14 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Plus, Search, RefreshCw, Download, X, Table2, Settings2,
   ChevronLeft, ChevronRight, SlidersHorizontal, ArrowUpDown,
-  CheckCircle2, Pencil,
+  CheckCircle2, Pencil, Bell,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
 import { logAction } from '@/lib/audit-log'
+import { saveTransactionToStorage } from '@/lib/transaction-backup'
 import AcSheetView from '@/components/sheets/AcSheetView'
+import ChamundaSheetView from '@/components/sheets/ChamundaSheetView'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface TxRow {
@@ -25,6 +27,7 @@ interface TxRow {
   swap_name: string
   difference: number | null
   remarks: string
+  commission_type?: string
 }
 
 interface ColDef { key: keyof TxRow | '_row'; label: string; width: number; align?: 'right'; editable?: boolean }
@@ -74,7 +77,8 @@ const COLS: ColDef[] = [
   { key:'swap_amount',   label:'SWAP AMOUNT',   width:120, align:'right', editable:true },
   { key:'swap_name',     label:'SWAP NAME',     width:150, editable:true },
   { key:'difference',    label:'DIFFERENCE',    width:100, align:'right', editable:true },
-  { key:'remarks',       label:'REMARKS',       width:90,  editable:true },
+  { key:'remarks',          label:'REMARKS',   width:90,  editable:true },
+  { key:'commission_type',  label:'COMM TYPE', width:110, editable:true },
 ]
 
 const LEFT_SHEETS = [
@@ -82,7 +86,7 @@ const LEFT_SHEETS = [
   { id:'ac_sheet',        label:'ac_sheet',        ready:true  },
   { id:'cc_sheet',        label:'cc_sheet',        ready:true  },
   { id:'bl_sheet',        label:'bl_sheet',        ready:false },
-  { id:'chamunda_sheet',  label:'chamunda_sheet',  ready:false },
+  { id:'chamunda_sheet',  label:'chamunda_sheet',  ready:true  },
   { id:'customer_sheet',  label:'customer_sheet',  ready:true  },
 ]
 
@@ -179,6 +183,44 @@ async function createCCSheetRow(transaction: Record<string, unknown>) {
   }
 }
 
+// ── Chamunda Sheet helper ──────────────────────────────────────────────────────
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function createChamundaSheetRow(transaction: any) {
+  try {
+    const date = transaction.date
+    await supabase.rpc('initialize_chamunda_sheet', { p_date: date })
+
+    const commPct  = Number(transaction.commission_pct) || 0
+    const commType = transaction.commission_type || 'Inclusive'
+    let commStr = `TRF ${commPct}`
+    if (commType === 'Exclusive') commStr = `CH ${commPct}`
+    if (commType === 'Deferred')  commStr = 'PAY PURU'
+
+    const { data, error } = await supabase.from('chamunda_sheet').insert({
+      date,
+      row_type: 'transaction',
+      transaction_id: transaction.id || null,
+      name: transaction.customer_name || '',
+      bank_charge_pct: 3.00,
+      paid_amount: Number(transaction.paid_amount) || 0,
+      swap_amount: Number(transaction.swap_amount)  || 0,
+      commission_pct: commPct,
+      commission_type: commStr,
+      machine_name: transaction.swap_name || '',
+      sort_order: Date.now(),
+    }).select()
+
+    if (error) {
+      console.error('❌ Chamunda insert failed:', error.message, error.details)
+      return
+    }
+    console.log('✅ Chamunda row created:', data)
+    await supabase.rpc('recalculate_chamunda_totals', { p_date: date })
+  } catch (err: unknown) {
+    console.error('❌ createChamundaSheetRow exception:', err)
+  }
+}
+
 // ── Insert Panel ───────────────────────────────────────────────────────────────
 function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=>void }) {
   const DEFAULT_COMM = 2.2
@@ -187,6 +229,8 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
     totalAmount:'', paidAmount:'', accountNames:[] as string[],
     swapAmount:'', swapNames:[] as string[], difference:'', remarks:'PAID',
   })
+  const [commType, setCommType] = useState('Inclusive')
+  const [commAutoSource, setCommAutoSource] = useState<string|null>(null)
   const [nextSr, setNextSr] = useState(6752)
   const [submitting, setSubmitting] = useState(false)
   const [acctOpen, setAcctOpen] = useState(false)
@@ -252,20 +296,55 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
     }
     console.log('[insert panel] cards:', cards)
     setCustomerCards(cards)
+
+    // Auto-fill reminder
+    const cardWithDue = cards.find(card => card.due_date)
+    if (cardWithDue && cardWithDue.due_date) {
+      setReminderDate(cardWithDue.due_date)
+      setReminderType('card_due')
+    } else {
+      const d = new Date()
+      d.setDate(d.getDate() + 7)
+      setReminderDate(d.toISOString().split('T')[0])
+      setReminderType('payment')
+    }
   }
 
   // Auto-calc amounts
   useEffect(()=>{
     const total=parseFloat(form.totalAmount); const comm=parseFloat(form.commPct)||DEFAULT_COMM
     if(!total||isNaN(total)) return
-    setForm(f=>({...f, paidAmount:total.toString(), swapAmount:Math.round(total+(total*comm/100)).toString()}))
+    const commAmt=Math.round(total*comm/100)
+    const swap=commType==='Inclusive'?total+commAmt:total
+    setForm(f=>({...f, paidAmount:total.toString(), swapAmount:Math.round(swap).toString()}))
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[form.totalAmount, form.commPct])
+  },[form.totalAmount, form.commPct, commType])
 
-  function toggleAcct(opt:string){setForm(f=>({...f,accountNames:f.accountNames.includes(opt)?f.accountNames.filter(a=>a!==opt):[...f.accountNames,opt]}))}
+  async function toggleAcct(opt:string){
+    const next=form.accountNames.includes(opt)?form.accountNames.filter(a=>a!==opt):[...form.accountNames,opt]
+    setForm(f=>({...f,accountNames:next}))
+    if(next.length>0){
+      const firstAcct=next[0].split(' ')[0]
+      const {data}=await supabase.from('bank_account_master').select('commission_pct,commission_type,account_name').ilike('account_name',`%${firstAcct}%`).limit(1)
+      if(data&&data.length>0&&Number(data[0].commission_pct)>0){
+        setForm(f=>({...f,commPct:String(data[0].commission_pct)}))
+        if(data[0].commission_type) setCommType(data[0].commission_type as string)
+        setCommAutoSource(data[0].account_name as string)
+      }
+    } else {
+      setCommAutoSource(null)
+    }
+  }
   function addSwap(v?:string){const val=(v??swapInput).trim(); if(val&&!form.swapNames.includes(val)) setForm(f=>({...f,swapNames:[...f.swapNames,val]})); setSwapInput('')}
 
   const [insertError, setInsertError] = useState<string|null>(null)
+
+  // Reminder state
+  const [showReminder, setShowReminder] = useState(false)
+  const [reminderDate, setReminderDate] = useState('')
+  const [reminderTime, setReminderTime] = useState('09:00')
+  const [reminderType, setReminderType] = useState('payment')
+  const [reminderNotes, setReminderNotes] = useState('')
 
   async function handleInsert(){
     if(!form.customerName){ setInsertError('Customer name is required'); return }
@@ -288,7 +367,8 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
       remarks:form.remarks,
       status:{PAID:'Paid',PEND:'Pending',PURU:'Puru',UNPAID:'Unpaid',SE:'Paid',CANCEL:'Cancelled'}[form.remarks]||'Pending',
       commission_pct:comm,
-      commission_amount:Math.round(total*comm/100),
+      commission_amount:commType==='Deferred'?0:Math.round(total*comm/100),
+      commission_type:commType,
     }
     console.log('[insert row] payload:', payload)
     const {data,error}=await supabase.from('transactions').insert(payload).select().single()
@@ -300,6 +380,8 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
         const d = data as Record<string,unknown>
         createCCSheetRow(d)
         createCustomerSheetRow({...d, customer_id: selectedCustomer?.id || null})
+        createChamundaSheetRow(d)
+        saveTransactionToStorage(d).catch(() => {})
         logAction({
           action: 'Transaction Created',
           module: 'Daily Register',
@@ -317,6 +399,28 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
             date: d.date,
           },
         })
+
+        if (showReminder && reminderDate) {
+          const titleMap: Record<string, string> = {
+            payment: `Collect payment — ${form.customerName}`,
+            card_due: `Card due — ${form.customerName}`,
+            follow_up: `Follow up — ${form.customerName}`,
+            custom: `Reminder — ${form.customerName}`,
+          }
+          await supabase.from('reminders').insert({
+            title: titleMap[reminderType] || `Reminder — ${form.customerName}`,
+            description: reminderNotes || `Entry SR #${d.sr_no} — ₹${form.totalAmount}`,
+            reminder_date: reminderDate,
+            reminder_time: reminderTime || '09:00:00',
+            type: reminderType,
+            customer_id: selectedCustomer?.id || null,
+            customer_name: form.customerName || '',
+            bank_name: form.bankCard || '',
+            amount: parseFloat(form.totalAmount) || 0,
+            status: 'pending',
+            phone: selectedCustomer?.phone || '',
+          })
+        }
       }
       onInserted()
       onClose()
@@ -413,7 +517,26 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
           </div>
 
           {/* Commission + Amounts */}
-          <div><label className={lbCls}>Commission %</label><input type="number" step="0.01" className={inCls} style={{borderColor:'#e5e7eb'}} value={form.commPct} onChange={e=>setForm(f=>({...f,commPct:e.target.value}))}/></div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className={lbCls}>
+                Commission %
+                {commAutoSource&&<span className="ml-1 font-normal" style={{color:'#3ECF8E',fontSize:10}}>auto-filled</span>}
+              </label>
+              <input type="number" step="0.01" className={inCls} style={{borderColor:'#e5e7eb'}} value={form.commPct} onChange={e=>{setForm(f=>({...f,commPct:e.target.value}));setCommAutoSource(null)}}/>
+            </div>
+            <div>
+              <label className={lbCls}>
+                Comm Type
+                {commAutoSource&&<span className="ml-1 font-normal" style={{color:'#3ECF8E',fontSize:10}}>auto-filled</span>}
+              </label>
+              <select className={`${inCls} bg-white`} style={{borderColor:'#e5e7eb'}} value={commType} onChange={e=>setCommType(e.target.value)}>
+                <option value="Inclusive">Inclusive</option>
+                <option value="Exclusive">Exclusive</option>
+                <option value="Deferred">Deferred</option>
+              </select>
+            </div>
+          </div>
           <div className="grid grid-cols-3 gap-2">
             <div><label className={lbCls}>Total Amount *</label><input type="number" className={inCls} style={{borderColor:'#e5e7eb'}} value={form.totalAmount} onChange={e=>setForm(f=>({...f,totalAmount:e.target.value}))}/></div>
             <div><label className={lbCls}>Paid Amount</label><input type="number" className={inCls} style={{borderColor:'#e5e7eb'}} value={form.paidAmount} onChange={e=>setForm(f=>({...f,paidAmount:e.target.value}))}/></div>
@@ -469,6 +592,106 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
               </select>
             </div>
           </div>
+
+          {/* Reminder section */}
+          <div>
+            <div
+              onClick={() => setShowReminder(!showReminder)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: '8px',
+                cursor: 'pointer', padding: '8px 0',
+                color: '#3ECF8E', fontSize: '12px', fontWeight: '500',
+                borderTop: '1px solid #e5e7eb', marginTop: '4px',
+              }}
+            >
+              <Bell size={14} />
+              {showReminder ? '− Remove Reminder' : '+ Add Reminder for this entry'}
+            </div>
+
+            {showReminder && (
+              <div style={{
+                background: '#f0fdf4', border: '1px solid #86efac',
+                borderRadius: '8px', padding: '10px', marginBottom: '8px',
+              }}>
+                <div style={{ fontSize: '11px', fontWeight: 'bold', color: '#166534', marginBottom: '8px' }}>
+                  🔔 Set Reminder
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '6px' }}>
+                  <div>
+                    <label style={{ fontSize: '10px', color: '#6b7280' }}>Reminder Date</label>
+                    <input
+                      type="date"
+                      value={reminderDate}
+                      onChange={e => setReminderDate(e.target.value)}
+                      min={new Date().toISOString().split('T')[0]}
+                      style={{ width: '100%', border: '1px solid #d1fae5', borderRadius: '5px', padding: '4px 6px', fontSize: '11px' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '10px', color: '#6b7280' }}>Time</label>
+                    <input
+                      type="time"
+                      value={reminderTime}
+                      onChange={e => setReminderTime(e.target.value)}
+                      style={{ width: '100%', border: '1px solid #d1fae5', borderRadius: '5px', padding: '4px 6px', fontSize: '11px' }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: '6px' }}>
+                  <label style={{ fontSize: '10px', color: '#6b7280' }}>Reminder Type</label>
+                  <select
+                    value={reminderType}
+                    onChange={e => setReminderType(e.target.value)}
+                    style={{ width: '100%', border: '1px solid #d1fae5', borderRadius: '5px', padding: '4px 6px', fontSize: '11px' }}
+                  >
+                    <option value="payment">💰 Payment Collection</option>
+                    <option value="follow_up">📞 Follow Up</option>
+                    <option value="card_due">💳 Card Due</option>
+                    <option value="custom">⭐ Custom</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ fontSize: '10px', color: '#6b7280' }}>Notes (optional)</label>
+                  <input
+                    type="text"
+                    value={reminderNotes}
+                    onChange={e => setReminderNotes(e.target.value)}
+                    placeholder="e.g. Collect commission, Follow up on payment..."
+                    style={{ width: '100%', border: '1px solid #d1fae5', borderRadius: '5px', padding: '4px 6px', fontSize: '11px' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '4px', marginTop: '6px', flexWrap: 'wrap' }}>
+                  {[
+                    { label: 'Tomorrow', days: 1 },
+                    { label: '+3 Days', days: 3 },
+                    { label: '+7 Days', days: 7 },
+                    { label: '+15 Days', days: 15 },
+                  ].map(({ label, days }) => (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => {
+                        const d = new Date()
+                        d.setDate(d.getDate() + days)
+                        setReminderDate(d.toISOString().split('T')[0])
+                      }}
+                      style={{
+                        background: 'white', border: '1px solid #86efac',
+                        borderRadius: '4px', padding: '2px 6px',
+                        fontSize: '10px', cursor: 'pointer', color: '#166534',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         {insertError&&<div className="mx-4 mb-2 text-xs px-3 py-2 rounded bg-red-50 text-red-700 border border-red-200">{insertError}</div>}
         <div className="px-4 py-3 border-t border-[#e5e7eb] flex gap-2">
@@ -483,17 +706,380 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
   )
 }
 
+// ── Custom Sheet View — matches daily_register format ─────────────────────────
+// CS_HDR background is applied dynamically per-sheet using themeColor
+const CS_HDR_BASE: Omit<React.CSSProperties, 'background'> = {
+  border: '1px solid #000', padding: '3px 8px', fontSize: 12,
+  fontFamily: 'Calibri,Arial,sans-serif',
+  color: '#000', fontWeight: 'bold', textAlign: 'center', whiteSpace: 'nowrap',
+}
+const CS_CELL: React.CSSProperties = {
+  border: '1px solid #000', padding: '3px 8px', fontSize: 12,
+  fontFamily: 'Calibri,Arial,sans-serif', background: '#fff',
+  color: '#000', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  verticalAlign: 'middle', cursor: 'text', textAlign: 'center',
+}
+
+function CustomSheetView({ sheet }: { sheet: { id: string; label: string; themeColor: string; columns: { key: string; label: string }[] } }) {
+  const [rows, setRows] = React.useState<Record<string, unknown>[]>([])
+  const [loading, setLoading] = React.useState(true)
+  const [search, setSearch] = React.useState('')
+  const [activeMonth, setActiveMonth] = React.useState<string>('all')
+  const [editCell, setEditCell] = React.useState<{ rowId: string; colKey: string; val: string } | null>(null)
+  const [flashCells, setFlashCells] = React.useState<Set<string>>(new Set())
+  const [toast, setToast] = React.useState<{ msg: string; type: 'success' | 'error' } | null>(null)
+  const editRef = React.useRef<HTMLInputElement>(null)
+  const colMapRef = React.useRef<Record<string, string>>({})  // colKey → txField
+  const txFieldsRef = React.useRef<string[]>([])
+
+  // Numeric tx fields — formatted with commas
+  const NUMBER_FIELDS = new Set(['total_amount','paid_amount','swap_amount','difference','commission_pct','commission_amount'])
+  const DATE_FIELDS = new Set(['date'])
+
+  function fmt(val: unknown, txField: string): string {
+    if (val == null || val === '') return ''
+    if (NUMBER_FIELDS.has(txField)) return Number(val).toLocaleString('en-IN')
+    if (DATE_FIELDS.has(txField)) {
+      const d = new Date(String(val))
+      return `${d.getDate()}/${d.getMonth()+1}/${String(d.getFullYear()).slice(2)}`
+    }
+    return String(val)
+  }
+
+  const loadRows = React.useCallback(async () => {
+    if (txFieldsRef.current.length === 0) return
+    const selectStr = ['id', 'sr_no', 'date', ...txFieldsRef.current].join(', ')
+    const { data } = await supabase.from('transactions').select(selectStr).order('sr_no', { ascending: true })
+    if (!data) return
+    setRows((data as unknown as Record<string, unknown>[]).map((tx) => {
+      const row: Record<string, unknown> = { _id: tx.id, _sr: tx.sr_no, _date: tx.date }
+      sheet.columns.forEach(col => {
+        const f = colMapRef.current[col.key]
+        row[col.key] = f ? tx[f] : undefined
+        row[`_txf_${col.key}`] = f  // store tx field name for formatting
+      })
+      return row
+    }))
+  }, [sheet.columns])
+
+  // Init: load mapping rules then rows
+  React.useEffect(() => {
+    let cancelled = false
+    async function init() {
+      setLoading(true)
+      const { data: rules } = await supabase
+        .from('field_mapping_rules').select('form_field_id, column_id').eq('sheet_id', sheet.id)
+      if (cancelled) return
+      if (!rules || rules.length === 0) { setLoading(false); return }
+      const colMap: Record<string, string> = {}
+      rules.forEach((r: { form_field_id: string; column_id: string }) => { colMap[r.column_id] = r.form_field_id })
+      colMapRef.current = colMap
+      txFieldsRef.current = Array.from(new Set(rules.map((r: { form_field_id: string }) => r.form_field_id)))
+      await loadRows()
+      if (!cancelled) setLoading(false)
+    }
+    init()
+    return () => { cancelled = true }
+  }, [sheet.id, sheet.columns, loadRows])
+
+  // Realtime
+  React.useEffect(() => {
+    const ch = supabase.channel(`csv_${sheet.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, loadRows)
+      .subscribe()
+    return () => { supabase.removeChannel(ch) }
+  }, [sheet.id, loadRows])
+
+  // Month tabs from data
+  const monthTabs = React.useMemo(() => {
+    const map = new Map<string, string>()
+    rows.forEach(r => {
+      const d = new Date(String(r._date ?? ''))
+      if (isNaN(d.getTime())) return
+      const key = `${d.getFullYear()}-${d.getMonth()+1}`
+      if (!map.has(key)) map.set(key, d.toLocaleString('en-IN',{month:'long'}).toUpperCase()+' '+d.getFullYear())
+    })
+    return Array.from(map.entries()).sort(([a],[b])=>a.localeCompare(b))
+  }, [rows])
+
+  // Filter + search
+  const filtered = React.useMemo(() => {
+    let r = rows
+    if (activeMonth !== 'all') {
+      const [y, m] = activeMonth.split('-').map(Number)
+      r = r.filter(row => { const d = new Date(String(row._date??'')); return d.getFullYear()===y && d.getMonth()+1===m })
+    }
+    if (search) {
+      const q = search.toLowerCase()
+      r = r.filter(row => sheet.columns.some(col => String(row[col.key]??'').toLowerCase().includes(q)))
+    }
+    return r
+  }, [rows, activeMonth, search, sheet.columns])
+
+  function showToast(msg: string, type: 'success'|'error' = 'success') {
+    setToast({msg,type}); setTimeout(()=>setToast(null),3000)
+  }
+
+  function startEdit(rowId: string, colKey: string, val: unknown) {
+    setEditCell({ rowId, colKey, val: val != null ? String(val) : '' })
+    setTimeout(() => editRef.current?.focus(), 20)
+  }
+
+  async function commitEdit() {
+    if (!editCell) return
+    const { rowId, colKey, val } = editCell
+    setEditCell(null)
+    const txField = colMapRef.current[colKey]
+    if (!txField) return
+    const parsed = NUMBER_FIELDS.has(txField) ? (val === '' ? null : parseFloat(val) || 0) : val
+    const { error } = await supabase.from('transactions').update({ [txField]: parsed }).eq('id', rowId)
+    if (error) { showToast('Update failed: ' + error.message, 'error'); return }
+    setRows(prev => prev.map(r => r._id === rowId ? { ...r, [colKey]: parsed } : r))
+    const key = `${rowId}__${colKey}`
+    setFlashCells(s => { const n = new Set(s); n.add(key); return n })
+    setTimeout(() => setFlashCells(s => { const n = new Set(s); n.delete(key); return n }), 700)
+    showToast('Saved')
+  }
+
+  async function exportXlsx() {
+    const ExcelJS = (await import('exceljs')).default
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet(sheet.label)
+
+    type Fill   = import('exceljs').Fill
+    type Border = import('exceljs').Borders
+
+    // Convert hex color (#RRGGBB) to ExcelJS ARGB (FFRRGGBB)
+    const hexToArgb = (hex: string) => 'FF' + hex.replace('#', '').toUpperCase().padEnd(6, '0')
+    const themeArgb = hexToArgb(sheet.themeColor)
+
+    const themeFill: Fill   = { type: 'pattern', pattern: 'solid', fgColor: { argb: themeArgb } }
+    const whiteFill: Fill   = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } }
+    const borderStyle: Partial<Border> = {
+      top: { style: 'thin', color: { argb: 'FF000000' } },
+      bottom: { style: 'thin', color: { argb: 'FF000000' } },
+      left: { style: 'thin', color: { argb: 'FF000000' } },
+      right: { style: 'thin', color: { argb: 'FF000000' } },
+    }
+    const centerAll = { horizontal: 'center' as const, vertical: 'middle' as const }
+    const totalCols = sheet.columns.length + 2 // col A (#) + data cols + 1 buffer
+
+    // Column widths
+    ws.columns = [
+      { key: '_sr', width: 6 },
+      ...sheet.columns.map(c => ({ key: c.key, width: 20 })),
+    ]
+
+    // ── DATE header row (merged across all data columns) ──
+    const today = new Date()
+    const dateStr = `${today.getDate()}/${today.getMonth()+1}/${String(today.getFullYear()).slice(2)}`
+    const activeMonthLabel = filtered.length > 0 ? (() => {
+      const d = new Date(String(filtered[0]._date ?? ''))
+      return isNaN(d.getTime()) ? '' : d.toLocaleString('en-IN',{month:'long'}).toUpperCase()+' '+d.getFullYear()
+    })() : ''
+
+    const titleRow = ws.addRow({})
+    titleRow.height = 20
+    ws.mergeCells(titleRow.number, 1, titleRow.number, totalCols - 1)
+    const titleCell = ws.getCell(titleRow.number, 1)
+    titleCell.value = `${sheet.label.toUpperCase()}${activeMonthLabel ? ' — ' + activeMonthLabel : ''}   DATE: ${dateStr}`
+    titleCell.fill = themeFill
+    titleCell.font = { bold: true, size: 12, name: 'Calibri', color: { argb: 'FF000000' } }
+    titleCell.alignment = centerAll
+    titleCell.border = borderStyle
+    for (let c = 1; c < totalCols; c++) ws.getCell(titleRow.number, c).border = borderStyle
+
+    // ── Column headers row ──
+    const hRow = ws.addRow({})
+    hRow.height = 18
+    hRow.getCell(1).value = '#'
+    sheet.columns.forEach((col, i) => { hRow.getCell(i + 2).value = col.label })
+    hRow.eachCell({ includeEmpty: true }, (cell, colNum) => {
+      if (colNum > totalCols - 1) return
+      cell.fill = themeFill
+      cell.font = { bold: true, size: 11, name: 'Calibri' }
+      cell.alignment = centerAll
+      cell.border = borderStyle
+    })
+
+    // ── Data rows ──
+    filtered.forEach((row, i) => {
+      const dr = ws.addRow({})
+      dr.height = 16
+      dr.getCell(1).value = i + 1
+      sheet.columns.forEach((col, ci) => {
+        const f = colMapRef.current[col.key]
+        const v = row[col.key]
+        let cellVal: string | number | Date | null = null
+        if (v != null && v !== '') {
+          if (NUMBER_FIELDS.has(f)) cellVal = Number(v)
+          else if (DATE_FIELDS.has(f)) cellVal = new Date(String(v))
+          else cellVal = String(v)
+        }
+        const cell = dr.getCell(ci + 2)
+        cell.value = cellVal
+        if (NUMBER_FIELDS.has(f) && cellVal !== null) cell.numFmt = '#,##0'
+        if (DATE_FIELDS.has(f) && cellVal instanceof Date) cell.numFmt = 'dd/mm/yy'
+      })
+      dr.fill = whiteFill
+      dr.font = { name: 'Calibri', size: 11 }
+      dr.alignment = centerAll
+      dr.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        if (colNum > totalCols - 1) return
+        cell.border = borderStyle
+        cell.fill = cell.fill ?? whiteFill
+      })
+    })
+
+    // ── Freeze header rows and hide columns past the table ──
+    ws.views = [{ state: 'frozen', ySplit: 2, xSplit: 0 }]
+    for (let c = totalCols; c <= 50; c++) {
+      const col = ws.getColumn(c)
+      col.width = 0.1
+      col.hidden = true
+      ws.eachRow(row => {
+        const cell = row.getCell(c)
+        cell.value = null
+        cell.fill = { type: 'pattern', pattern: 'none' } as Fill
+        cell.border = {}
+        cell.font = {}
+      })
+    }
+    ws.pageSetup = { printArea: `A1:${String.fromCharCode(64 + totalCols - 1)}1000` }
+
+    const buf = await wb.xlsx.writeBuffer()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+    a.download = `${sheet.label}_${new Date().toISOString().split('T')[0]}.xlsx`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  if (sheet.columns.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-center p-12">
+        <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{background:'#f0fdf4'}}><Table2 size={26} color="#3ECF8E"/></div>
+        <div>
+          <h3 className="text-sm font-semibold text-[#1a1a1a] mb-1">{sheet.label}</h3>
+          <p className="text-xs text-[#6b7280]">No columns defined yet.</p>
+          <p className="text-xs text-[#9ca3af] mt-0.5">Go to <strong>Field Mapping</strong> to add columns to this sheet.</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden bg-white">
+      {toast && <div className={`fixed top-4 right-4 z-[100] px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium text-white ${toast.type==='success'?'bg-[#3ECF8E]':'bg-red-500'}`}>{toast.msg}</div>}
+
+      {/* Month tabs */}
+      {monthTabs.length > 0 && (
+        <div className="flex items-center gap-0 border-b border-[#e5e7eb] bg-[#f9fafb] overflow-x-auto flex-shrink-0">
+          <button onClick={()=>setActiveMonth('all')}
+            className="px-3 py-1.5 text-xs font-medium whitespace-nowrap border-r border-[#e5e7eb]"
+            style={{background:activeMonth==='all'?'#fff':'transparent',borderBottom:activeMonth==='all'?'2px solid #3ECF8E':'2px solid transparent',color:activeMonth==='all'?'#1a1a1a':'#6b7280'}}>
+            ALL
+          </button>
+          {monthTabs.map(([key,label])=>(
+            <button key={key} onClick={()=>setActiveMonth(key)}
+              className="px-3 py-1.5 text-xs font-medium whitespace-nowrap border-r border-[#e5e7eb]"
+              style={{background:activeMonth===key?'#fff':'transparent',borderBottom:activeMonth===key?'2px solid #3ECF8E':'2px solid transparent',color:activeMonth===key?'#1a1a1a':'#6b7280'}}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-[#e5e7eb] bg-white flex-shrink-0">
+        <span className="text-xs text-[#6b7280]">{filtered.length} rows</span>
+        <div className="ml-auto flex items-center gap-2">
+          <div className="flex items-center gap-1 px-2 py-1 rounded border text-xs" style={{borderColor:'#e5e7eb'}}>
+            <Search size={11} color="#9ca3af"/>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." className="outline-none text-xs w-28" style={{fontFamily:'inherit'}}/>
+            {search && <button onClick={()=>setSearch('')}><X size={10} color="#9ca3af"/></button>}
+          </div>
+          <button onClick={()=>loadRows()} className="p-1.5 rounded border hover:bg-gray-50" style={{borderColor:'#e5e7eb'}}><RefreshCw size={12} color="#6b7280"/></button>
+          <button onClick={exportXlsx} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded border text-xs font-medium text-[#374151] hover:bg-gray-50" style={{borderColor:'#e5e7eb'}}>
+            <Download size={12}/> Export .xlsx
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="flex-1 overflow-auto" style={{fontFamily:'Calibri,Arial,sans-serif'}}>
+        {loading ? (
+          <div className="flex items-center justify-center h-32 text-sm text-[#6b7280]">Loading...</div>
+        ) : (
+          <table style={{borderCollapse:'collapse',tableLayout:'auto',minWidth:sheet.columns.length*140+48}}>
+            <thead>
+              <tr>
+                <td colSpan={sheet.columns.length + 1}
+                  style={{background:sheet.themeColor,border:'1px solid #000',padding:'4px 8px',fontFamily:'Calibri,Arial,sans-serif',fontSize:12,fontWeight:'bold',textAlign:'center',color:'#000'}}>
+                  {sheet.label.toUpperCase()} — DATE: {new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'2-digit',year:'numeric'})}
+                </td>
+              </tr>
+              <tr>
+                <th style={{...CS_HDR_BASE,background:sheet.themeColor,width:48}}>#</th>
+                {sheet.columns.map(col => <th key={col.key} style={{...CS_HDR_BASE,background:sheet.themeColor,minWidth:130}}>{col.label}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr><td colSpan={sheet.columns.length+1} style={{...CS_CELL,textAlign:'center',padding:'24px',color:'#9ca3af'}}>
+                  No entries yet — submit a transaction from <strong>New Entry</strong> to populate this sheet.
+                </td></tr>
+              ) : filtered.map((row, i) => (
+                <tr key={String(row._id??i)} style={{background: i%2===0?'#fff':'#f9fafb'}}>
+                  <td style={{...CS_CELL,textAlign:'center',color:'#9ca3af',width:48,cursor:'default'}}>{i+1}</td>
+                  {sheet.columns.map(col => {
+                    const isEditing = editCell?.rowId===String(row._id) && editCell.colKey===col.key
+                    const flash = flashCells.has(`${row._id}__${col.key}`)
+                    const txField = colMapRef.current[col.key] ?? ''
+                    const display = fmt(row[col.key], txField)
+                    return (
+                      <td key={col.key} style={{...CS_CELL,textAlign:'center',background:flash?'#bbf7d0':i%2===0?'#fff':'#f9fafb',transition:'background 0.4s',minWidth:130}}
+                        onClick={()=>startEdit(String(row._id), col.key, row[col.key])}>
+                        {isEditing ? (
+                          <input ref={editRef} value={editCell!.val}
+                            onChange={e=>setEditCell(c=>c?{...c,val:e.target.value}:null)}
+                            onBlur={commitEdit}
+                            onKeyDown={e=>{if(e.key==='Enter')commitEdit();if(e.key==='Escape')setEditCell(null)}}
+                            style={{width:'100%',border:'none',outline:`2px solid ${sheet.themeColor}`,padding:'2px 4px',fontSize:12,fontFamily:'Calibri,Arial,sans-serif',background:'#fff',boxSizing:'border-box',textAlign:'center'}}/>
+                        ) : display ? display : <span style={{color:'#d1d5db'}}>—</span>}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Coming Soon placeholder ────────────────────────────────────────────────────
-function ComingSoon({name}:{name:string}) {
+function ComingSoon({name, isCustom}:{name:string; isCustom?: boolean}) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center p-12">
-      <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{background:'#f3f4f6'}}>
-        <Table2 size={28} color="#9ca3af"/>
+      <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{background: isCustom ? '#f0fdf4' : '#f3f4f6'}}>
+        <Table2 size={28} color={isCustom ? '#3ECF8E' : '#9ca3af'}/>
       </div>
       <div>
         <h3 className="text-base font-semibold text-[#1a1a1a] mb-1">{name}</h3>
-        <p className="text-sm text-[#6b7280]">Mapping in progress — coming soon</p>
-        <p className="text-xs text-[#9ca3af] mt-1">This sheet will be available once mapping is complete</p>
+        {isCustom ? (
+          <>
+            <p className="text-sm text-[#6b7280]">Custom sheet</p>
+            <p className="text-xs text-[#9ca3af] mt-1">This sheet was created in Field Mapping. A full data view is not yet available.</p>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-[#6b7280]">Coming soon</p>
+            <p className="text-xs text-[#9ca3af] mt-1">This sheet view is under development</p>
+          </>
+        )}
       </div>
     </div>
   )
@@ -573,7 +1159,7 @@ interface CustSheetRow {
 }
 
 const CS_HS: React.CSSProperties = { border:'1px solid #000', padding:'3px 6px', fontSize:12, fontFamily:'Calibri,Arial,sans-serif', background:'#92D050', color:'#000', fontWeight:'bold', textAlign:'center', whiteSpace:'nowrap' }
-const CS_CS: React.CSSProperties = { border:'1px solid #000', padding:'3px 6px', fontSize:12, fontFamily:'Calibri,Arial,sans-serif', background:'#ffffff', color:'#000', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', verticalAlign:'middle' }
+const CS_CS: React.CSSProperties = { border:'1px solid #000', padding:'3px 6px', fontSize:12, fontFamily:'Calibri,Arial,sans-serif', background:'#ffffff', color:'#000', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', verticalAlign:'middle', textAlign:'center' }
 const CS_CW = { due_date:100, customer_name:150, card:80, card_number:170, pin:80, cvv_expiry:90, total_amount:110, paid_amount:110, swap_amount:110, commission:80, paid_remaining:130, swap_pending:120, account_name:150, swap_name:150, paid_date:110, card_network:120 }
 const CS_W = Object.values(CS_CW).reduce((s,v)=>s+v,0)
 
@@ -630,14 +1216,21 @@ function CustomerSheetView() {
 
   const fetchAll = useCallback(async()=>{
     setLoading(true)
-    const {data} = await supabase.from('customer_sheet').select('*').order('date',{ascending:true})
-    const rows = (data as CustSheetRow[])||[]
+    const [{data: sheetData}, {data: custData}] = await Promise.all([
+      supabase.from('customer_sheet').select('*').order('date',{ascending:true}),
+      supabase.from('customers').select('id,name').order('name',{ascending:true}),
+    ])
+    const rows = (sheetData as CustSheetRow[])||[]
     setAllRows(rows)
-    // Build unique customers with counts
+    // Build map from existing sheet rows
     const map = new Map<string,CustTab>()
     rows.forEach(r=>{
       if(!map.has(r.customer_name)) map.set(r.customer_name,{customer_name:r.customer_name,customer_id:r.customer_id,count:0})
       map.get(r.customer_name)!.count++
+    })
+    // Add customers from customers table who have no sheet rows yet
+    ;(custData as {id:string;name:string}[]||[]).forEach(c=>{
+      if(!map.has(c.name)) map.set(c.name,{customer_name:c.name,customer_id:c.id,count:0})
     })
     const tabs=Array.from(map.values()).sort((a,b)=>a.customer_name.localeCompare(b.customer_name))
     setCustomers(tabs)
@@ -743,6 +1336,11 @@ function CustomerSheetView() {
 
   const activeRows=useMemo(()=>allRows.filter(r=>r.customer_name===activeCustomer),[allRows,activeCustomer])
   const monthRange=useMemo(()=>getMonthRange(activeRows),[activeRows])
+  const csDateGroups=useMemo(()=>{
+    const map=new Map<string,CustSheetRow[]>()
+    activeRows.forEach(r=>{ const d=r.date||''; if(!map.has(d)) map.set(d,[]); map.get(d)!.push(r) })
+    return Array.from(map.entries()).sort(([a],[b])=>a.localeCompare(b))
+  },[activeRows])
   const rowCountMap=useMemo(()=>{ const m=new Map<string,number>(); allRows.forEach(r=>m.set(r.customer_name,(m.get(r.customer_name)||0)+1)); return m },[allRows])
   const inp='w-full rounded border px-2.5 py-1.5 text-xs outline-none focus:border-[#3ECF8E]'
   const lb='block text-[11px] font-medium text-[#374151] mb-0.5'
@@ -884,66 +1482,71 @@ function CustomerSheetView() {
           <div className="flex items-center justify-center h-32 text-sm text-[#6b7280]">Loading...</div>
         ):(
           <table style={{width:CS_W+32,borderCollapse:'collapse',tableLayout:'fixed'}}>
-            <thead>
-              {activeRows.length>0&&(
-                <tr>
-                  <td colSpan={17} style={{...CS_HS,textAlign:'center',fontSize:13,background:'#92D050'}}>
-                    {activeCustomer}//WITH COM//--{monthRange}
-                  </td>
-                </tr>
-              )}
-              <tr>
-                <th style={{...CS_HS,width:CS_CW.due_date}}>DUE DATE</th>
-                <th style={{...CS_HS,width:CS_CW.customer_name}}>CM NAME</th>
-                <th style={{...CS_HS,width:CS_CW.card}}>CARD</th>
-                <th style={{...CS_HS,width:CS_CW.card_number}}>CARD NO</th>
-                <th style={{...CS_HS,width:CS_CW.pin}}>PIN</th>
-                <th style={{...CS_HS,width:CS_CW.cvv_expiry}}>CVV/EXPRY</th>
-                <th style={{...CS_HS,width:CS_CW.total_amount}}>TOTAL AMT</th>
-                <th style={{...CS_HS,width:CS_CW.paid_amount}}>PAID AMT</th>
-                <th style={{...CS_HS,width:CS_CW.swap_amount}}>SWAP AMT</th>
-                <th style={{...CS_HS,width:CS_CW.commission}}>COM</th>
-                <th style={{...CS_HS,width:CS_CW.paid_remaining}}>PAID REMAINING</th>
-                <th style={{...CS_HS,width:CS_CW.swap_pending}}>SWAP PENDING</th>
-                <th style={{...CS_HS,width:CS_CW.account_name}}>A/C NAME</th>
-                <th style={{...CS_HS,width:CS_CW.swap_name}}>SWAP NAME</th>
-                <th style={{...CS_HS,width:CS_CW.paid_date}}>PAID DATE</th>
-                <th style={{...CS_HS,width:CS_CW.card_network}}>VISA/MASTERCARD</th>
-                <th style={{...CS_HS,width:32,background:'#e8f5e9'}}></th>
-              </tr>
-            </thead>
             <tbody>
-              {activeRows.length===0?(
+              {csDateGroups.length===0?(
                 <tr><td colSpan={17} style={{textAlign:'center',padding:'32px',color:'#9ca3af'}}>No data for {activeCustomer||'this customer'}</td></tr>
-              ):activeRows.map((r,i)=>{
-                const rowBg=i%2===1?'#F0FFF0':'#ffffff'
+              ):csDateGroups.map(([date,drows],gi)=>{
+                const fmtD2=(d:string)=>{ if(!d) return ''; const [y,m,dd]=d.split('-'); return `${parseInt(dd)}/${parseInt(m)}/${y.slice(2)}` }
                 return (
-                  <tr key={r.id} className="group" style={{background:rowBg}}>
-                    <EC rowId={r.id} field="due_date"       value={r.due_date}       type="date"   align="center" width={CS_CW.due_date}       rowBg={rowBg}/>
-                    <EC rowId={r.id} field="customer_name"  value={r.customer_name}  type="text"   align="left"   width={CS_CW.customer_name}  rowBg={rowBg}/>
-                    <EC rowId={r.id} field="card"           value={r.card}           type="text"   align="center" width={CS_CW.card}           rowBg={rowBg}/>
-                    <EC rowId={r.id} field="card_number"    value={r.card_number}    type="text"   align="center" width={CS_CW.card_number}    rowBg={rowBg}/>
-                    <EC rowId={r.id} field="pin"            value={r.pin}            type="text"   align="center" width={CS_CW.pin}            rowBg={rowBg}/>
-                    <EC rowId={r.id} field="cvv_expiry"     value={r.cvv_expiry}     type="text"   align="center" width={CS_CW.cvv_expiry}     rowBg={rowBg}/>
-                    <EC rowId={r.id} field="total_amount"   value={r.total_amount}   type="number" align="right"  width={CS_CW.total_amount}   rowBg={rowBg}/>
-                    <EC rowId={r.id} field="paid_amount"    value={r.paid_amount}    type="number" align="right"  width={CS_CW.paid_amount}    rowBg={rowBg}/>
-                    <EC rowId={r.id} field="swap_amount"    value={r.swap_amount}    type="number" align="right"  width={CS_CW.swap_amount}    rowBg={rowBg}/>
-                    <EC rowId={r.id} field="commission"     value={r.commission}     type="number" align="right"  width={CS_CW.commission}     rowBg={rowBg} color="#2563eb"/>
-                    <EC rowId={r.id} field="paid_remaining" value={r.paid_remaining} type="number" align="right"  width={CS_CW.paid_remaining} rowBg={rowBg}/>
-                    <EC rowId={r.id} field="swap_pending"   value={r.swap_pending}   type="number" align="right"  width={CS_CW.swap_pending}   rowBg={rowBg}/>
-                    <EC rowId={r.id} field="account_name"   value={r.account_name}   type="text"   align="left"   width={CS_CW.account_name}   rowBg={rowBg}/>
-                    <EC rowId={r.id} field="swap_name"      value={r.swap_name}      type="text"   align="left"   width={CS_CW.swap_name}      rowBg={rowBg}/>
-                    <EC rowId={r.id} field="paid_date"      value={r.paid_date}      type="date"   align="center" width={CS_CW.paid_date}      rowBg={rowBg}/>
-                    <EC rowId={r.id} field="card_network"   value={r.card_network}   type="text"   align="center" width={CS_CW.card_network}   rowBg={rowBg}/>
-                    <td style={{...CS_CS,width:32,padding:'2px 4px',textAlign:'center',background:rowBg}}>
-                      <button
-                        onClick={()=>setDeleteConfirm(r.id)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Delete row"
-                        style={{color:'#ef4444',background:'none',border:'none',cursor:'pointer',fontSize:14,lineHeight:1,padding:'2px'}}
-                      >✕</button>
-                    </td>
-                  </tr>
+                  <React.Fragment key={date}>
+                    {gi>0&&<tr><td colSpan={17} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
+                    {gi>0&&<tr><td colSpan={17} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
+                    <tr>
+                      <td colSpan={17} style={{...CS_HS,textAlign:'center',fontSize:13,background:'#92D050'}}>
+                        DATE {fmtD2(date)} — {activeCustomer}//WITH COM//--{monthRange}
+                      </td>
+                    </tr>
+                    <tr>
+                      <th style={{...CS_HS,width:CS_CW.due_date}}>DUE DATE</th>
+                      <th style={{...CS_HS,width:CS_CW.customer_name}}>CM NAME</th>
+                      <th style={{...CS_HS,width:CS_CW.card}}>CARD</th>
+                      <th style={{...CS_HS,width:CS_CW.card_number}}>CARD NO</th>
+                      <th style={{...CS_HS,width:CS_CW.pin}}>PIN</th>
+                      <th style={{...CS_HS,width:CS_CW.cvv_expiry}}>CVV/EXPRY</th>
+                      <th style={{...CS_HS,width:CS_CW.total_amount}}>TOTAL AMT</th>
+                      <th style={{...CS_HS,width:CS_CW.paid_amount}}>PAID AMT</th>
+                      <th style={{...CS_HS,width:CS_CW.swap_amount}}>SWAP AMT</th>
+                      <th style={{...CS_HS,width:CS_CW.commission}}>COM</th>
+                      <th style={{...CS_HS,width:CS_CW.paid_remaining}}>PAID REMAINING</th>
+                      <th style={{...CS_HS,width:CS_CW.swap_pending}}>SWAP PENDING</th>
+                      <th style={{...CS_HS,width:CS_CW.account_name}}>A/C NAME</th>
+                      <th style={{...CS_HS,width:CS_CW.swap_name}}>SWAP NAME</th>
+                      <th style={{...CS_HS,width:CS_CW.paid_date}}>PAID DATE</th>
+                      <th style={{...CS_HS,width:CS_CW.card_network}}>VISA/MASTERCARD</th>
+                      <th style={{...CS_HS,width:32,background:'#e8f5e9'}}></th>
+                    </tr>
+                    {drows.map((r,i)=>{
+                      const rowBg=i%2===1?'#F0FFF0':'#ffffff'
+                      return (
+                        <tr key={r.id} className="group" style={{background:rowBg}}>
+                          <EC rowId={r.id} field="due_date"       value={r.due_date}       type="date"   align="center" width={CS_CW.due_date}       rowBg={rowBg}/>
+                          <EC rowId={r.id} field="customer_name"  value={r.customer_name}  type="text"   align="left"   width={CS_CW.customer_name}  rowBg={rowBg}/>
+                          <EC rowId={r.id} field="card"           value={r.card}           type="text"   align="center" width={CS_CW.card}           rowBg={rowBg}/>
+                          <EC rowId={r.id} field="card_number"    value={r.card_number}    type="text"   align="center" width={CS_CW.card_number}    rowBg={rowBg}/>
+                          <EC rowId={r.id} field="pin"            value={r.pin}            type="text"   align="center" width={CS_CW.pin}            rowBg={rowBg}/>
+                          <EC rowId={r.id} field="cvv_expiry"     value={r.cvv_expiry}     type="text"   align="center" width={CS_CW.cvv_expiry}     rowBg={rowBg}/>
+                          <EC rowId={r.id} field="total_amount"   value={r.total_amount}   type="number" align="right"  width={CS_CW.total_amount}   rowBg={rowBg}/>
+                          <EC rowId={r.id} field="paid_amount"    value={r.paid_amount}    type="number" align="right"  width={CS_CW.paid_amount}    rowBg={rowBg}/>
+                          <EC rowId={r.id} field="swap_amount"    value={r.swap_amount}    type="number" align="right"  width={CS_CW.swap_amount}    rowBg={rowBg}/>
+                          <EC rowId={r.id} field="commission"     value={r.commission}     type="number" align="right"  width={CS_CW.commission}     rowBg={rowBg} color="#2563eb"/>
+                          <EC rowId={r.id} field="paid_remaining" value={r.paid_remaining} type="number" align="right"  width={CS_CW.paid_remaining} rowBg={rowBg}/>
+                          <EC rowId={r.id} field="swap_pending"   value={r.swap_pending}   type="number" align="right"  width={CS_CW.swap_pending}   rowBg={rowBg}/>
+                          <EC rowId={r.id} field="account_name"   value={r.account_name}   type="text"   align="left"   width={CS_CW.account_name}   rowBg={rowBg}/>
+                          <EC rowId={r.id} field="swap_name"      value={r.swap_name}      type="text"   align="left"   width={CS_CW.swap_name}      rowBg={rowBg}/>
+                          <EC rowId={r.id} field="paid_date"      value={r.paid_date}      type="date"   align="center" width={CS_CW.paid_date}      rowBg={rowBg}/>
+                          <EC rowId={r.id} field="card_network"   value={r.card_network}   type="text"   align="center" width={CS_CW.card_network}   rowBg={rowBg}/>
+                          <td style={{...CS_CS,width:32,padding:'2px 4px',textAlign:'center',background:rowBg}}>
+                            <button
+                              onClick={()=>setDeleteConfirm(r.id)}
+                              className="opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Delete row"
+                              style={{color:'#ef4444',background:'none',border:'none',cursor:'pointer',fontSize:14,lineHeight:1,padding:'2px'}}
+                            >✕</button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </React.Fragment>
                 )
               })}
             </tbody>
@@ -1230,10 +1833,15 @@ function CCSheetView() {
   }
 
   const HS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:12,fontFamily:'Calibri,Arial,sans-serif',background:'#FFFF00',color:'#000',fontWeight:'bold',textAlign:'center',whiteSpace:'nowrap'}
-  const CS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:12,fontFamily:'Calibri,Arial,sans-serif',background:'#ffffff',color:'#000',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'middle'}
+  const CS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:12,fontFamily:'Calibri,Arial,sans-serif',background:'#ffffff',color:'#000',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'middle',textAlign:'center'}
   const CW={tid:120,machine_name:150,date:100,swipe_amount:120,customer_amount:150,our_commission:130,bank_commission:130,status:90,customer_name:160,agent_code:80}
   const W=Object.values(CW).reduce((s,v)=>s+v,0)
   const activeRows = React.useMemo(()=>rows.filter(r=>r.machine_name===activeMachine),[rows,activeMachine])
+  const ccDateGroups = React.useMemo(()=>{
+    const map=new Map<string,CCRow[]>()
+    activeRows.forEach(r=>{ const d=r.date||''; if(!map.has(d)) map.set(d,[]); map.get(d)!.push(r) })
+    return Array.from(map.entries()).sort(([a],[b])=>a.localeCompare(b))
+  },[activeRows])
   const rowCountByMachine = React.useMemo(()=>{
     const m=new Map<string,number>(); rows.forEach(r=>{ m.set(r.machine_name,(m.get(r.machine_name)||0)+1) }); return m
   },[rows])
@@ -1263,38 +1871,48 @@ function CCSheetView() {
           <div className="flex items-center justify-center h-32 text-sm text-[#6b7280]">Loading...</div>
         ):(
           <table style={{width:W,borderCollapse:'collapse',tableLayout:'fixed'}}>
-            <thead>
-              <tr>
-                <th style={{...HS,width:CW.tid}}>BANK CODE NO / TID</th>
-                <th style={{...HS,width:CW.machine_name}}>SWIPE MACHINE NAME</th>
-                <th style={{...HS,width:CW.date}}>DATE</th>
-                <th style={{...HS,width:CW.swipe_amount}}>SWIPE AMOUNT</th>
-                <th style={{...HS,width:CW.customer_amount}}>CUSTOMER AMOUNT</th>
-                <th style={{...HS,width:CW.our_commission}}>OUR COMMISSION</th>
-                <th style={{...HS,width:CW.bank_commission}}>BANK COMMISSION</th>
-                <th style={{...HS,width:CW.status}}>STATUS</th>
-                <th style={{...HS,width:CW.customer_name}}>CUSTOMER NAME</th>
-                <th style={{...HS,width:CW.agent_code}}>CODE</th>
-              </tr>
-            </thead>
             <tbody>
-              {activeRows.length===0?(
+              {ccDateGroups.length===0?(
                 <tr><td colSpan={10} style={{textAlign:'center',padding:'32px',color:'#9ca3af'}}>No data for {activeMachine||'this machine'}</td></tr>
-              ):activeRows.map(r=>{
-                const d=new Date(r.date); const dd=String(d.getDate()).padStart(2,'0'); const mm=String(d.getMonth()+1).padStart(2,'0'); const yy=String(d.getFullYear()).slice(2)
+              ):ccDateGroups.map(([date,drows],gi)=>{
+                const fmtD2=(d:string)=>{ if(!d) return ''; const [y,m,dd]=d.split('-'); return `${parseInt(dd)}/${parseInt(m)}/${y.slice(2)}` }
                 return (
-                  <tr key={r.id}>
-                    <td style={{...CS,width:CW.tid,textAlign:'center'}}>{r.tid}</td>
-                    <td style={{...CS,width:CW.machine_name}}>{r.machine_name}</td>
-                    <td style={{...CS,width:CW.date,textAlign:'center'}}>{`${parseInt(dd)}/${parseInt(mm)}/${yy}`}</td>
-                    <td style={{...CS,width:CW.swipe_amount,textAlign:'right'}}>{r.swipe_amount?Number(r.swipe_amount).toLocaleString('en-IN'):''}</td>
-                    <td style={{...CS,width:CW.customer_amount,textAlign:'right'}}>{r.customer_amount?Number(r.customer_amount).toLocaleString('en-IN'):''}</td>
-                    <td style={{...CS,width:CW.our_commission,textAlign:'right',color:'#2563eb'}}>{r.our_commission?Number(r.our_commission).toLocaleString('en-IN'):''}</td>
-                    <td style={{...CS,width:CW.bank_commission,textAlign:'right'}}>{r.bank_commission?Number(r.bank_commission).toLocaleString('en-IN'):''}</td>
-                    <td style={{...CS,width:CW.status,textAlign:'center'}}>{r.status}</td>
-                    <td style={{...CS,width:CW.customer_name}}>{r.customer_name}</td>
-                    <td style={{...CS,width:CW.agent_code,textAlign:'center'}}>{r.agent_code}</td>
-                  </tr>
+                  <React.Fragment key={date}>
+                    {gi>0&&<tr><td colSpan={10} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
+                    {gi>0&&<tr><td colSpan={10} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
+                    <tr>
+                      <td colSpan={10} style={{...HS,textAlign:'center',fontSize:13}}>DATE {fmtD2(date)}</td>
+                    </tr>
+                    <tr>
+                      <th style={{...HS,width:CW.tid}}>BANK CODE NO / TID</th>
+                      <th style={{...HS,width:CW.machine_name}}>SWIPE MACHINE NAME</th>
+                      <th style={{...HS,width:CW.date}}>DATE</th>
+                      <th style={{...HS,width:CW.swipe_amount}}>SWIPE AMOUNT</th>
+                      <th style={{...HS,width:CW.customer_amount}}>CUSTOMER AMOUNT</th>
+                      <th style={{...HS,width:CW.our_commission}}>OUR COMMISSION</th>
+                      <th style={{...HS,width:CW.bank_commission}}>BANK COMMISSION</th>
+                      <th style={{...HS,width:CW.status}}>STATUS</th>
+                      <th style={{...HS,width:CW.customer_name}}>CUSTOMER NAME</th>
+                      <th style={{...HS,width:CW.agent_code}}>CODE</th>
+                    </tr>
+                    {drows.map(r=>{
+                      const d=new Date(r.date); const dd=String(d.getDate()).padStart(2,'0'); const mm=String(d.getMonth()+1).padStart(2,'0'); const yy=String(d.getFullYear()).slice(2)
+                      return (
+                        <tr key={r.id}>
+                          <td style={{...CS,width:CW.tid,textAlign:'center'}}>{r.tid}</td>
+                          <td style={{...CS,width:CW.machine_name}}>{r.machine_name}</td>
+                          <td style={{...CS,width:CW.date,textAlign:'center'}}>{`${parseInt(dd)}/${parseInt(mm)}/${yy}`}</td>
+                          <td style={{...CS,width:CW.swipe_amount,textAlign:'center'}}>{r.swipe_amount?Number(r.swipe_amount).toLocaleString('en-IN'):''}</td>
+                          <td style={{...CS,width:CW.customer_amount,textAlign:'center'}}>{r.customer_amount?Number(r.customer_amount).toLocaleString('en-IN'):''}</td>
+                          <td style={{...CS,width:CW.our_commission,textAlign:'center',color:'#2563eb'}}>{r.our_commission?Number(r.our_commission).toLocaleString('en-IN'):''}</td>
+                          <td style={{...CS,width:CW.bank_commission,textAlign:'center'}}>{r.bank_commission?Number(r.bank_commission).toLocaleString('en-IN'):''}</td>
+                          <td style={{...CS,width:CW.status,textAlign:'center'}}>{r.status}</td>
+                          <td style={{...CS,width:CW.customer_name}}>{r.customer_name}</td>
+                          <td style={{...CS,width:CW.agent_code,textAlign:'center'}}>{r.agent_code}</td>
+                        </tr>
+                      )
+                    })}
+                  </React.Fragment>
                 )
               })}
             </tbody>
@@ -1392,7 +2010,7 @@ interface MonthTab { key: string; label: string; year: number; month: number; co
 
 // ── Sheet Table Component ──────────────────────────────────────────────────────
 const TBL_HS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:13,fontFamily:'Calibri,Arial,sans-serif',background:'#FFFF00',color:'#000',fontWeight:'bold',textAlign:'center',whiteSpace:'nowrap'}
-const TBL_CS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:13,fontFamily:'Calibri,Arial,sans-serif',background:'#ffffff',color:'#000',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'middle'}
+const TBL_CS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:13,fontFamily:'Calibri,Arial,sans-serif',background:'#ffffff',color:'#000',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'middle',textAlign:'center'}
 const TBL_ES:React.CSSProperties={border:'none',background:'#ffffff',height:16,padding:0}
 const TBL_CW={sr_no:70,date:120,customer_name:180,bank_card:90,total_amount:115,paid_amount:110,account_name:160,swap_amount:115,swap_name:150,difference:100,remarks:90}
 const TBL_W=Object.values(TBL_CW).reduce((s,v)=>s+v,0)
@@ -1452,26 +2070,33 @@ function SheetTable({dateGroups,flashCells,editCell,renderCell,startEdit,COLS}:S
                 <td style={{...TBL_CS,width:TBL_CW.bank_card,textAlign:'center',cursor:'pointer',background:bg(row.id,'bank_card')}} onClick={()=>editCol(row,'bank_card')}>
                   {editCell?.id===row.id&&editCell.col==='bank_card'?renderCell(row,colDef('bank_card')):<>{row.bank_card||''}</>}
                 </td>
-                <td style={{...TBL_CS,width:TBL_CW.total_amount,textAlign:'right',cursor:'pointer',background:bg(row.id,'total_amount')}} onClick={()=>editCol(row,'total_amount')}>
+                <td style={{...TBL_CS,width:TBL_CW.total_amount,textAlign:'center',cursor:'pointer',background:bg(row.id,'total_amount')}} onClick={()=>editCol(row,'total_amount')}>
                   {editCell?.id===row.id&&editCell.col==='total_amount'?renderCell(row,colDef('total_amount')):<>{row.total_amount!=null?fmtAmt(Number(row.total_amount)):''}</>}
                 </td>
-                <td style={{...TBL_CS,width:TBL_CW.paid_amount,textAlign:'right',cursor:'pointer',background:bg(row.id,'paid_amount')}} onClick={()=>editCol(row,'paid_amount')}>
+                <td style={{...TBL_CS,width:TBL_CW.paid_amount,textAlign:'center',cursor:'pointer',background:bg(row.id,'paid_amount')}} onClick={()=>editCol(row,'paid_amount')}>
                   {editCell?.id===row.id&&editCell.col==='paid_amount'?renderCell(row,colDef('paid_amount')):<>{row.paid_amount!=null?fmtAmt(Number(row.paid_amount)):''}</>}
                 </td>
                 <td style={{...TBL_CS,width:TBL_CW.account_name,cursor:'pointer',background:bg(row.id,'account_name')}} onClick={()=>editCol(row,'account_name')}>
                   {editCell?.id===row.id&&editCell.col==='account_name'?renderCell(row,colDef('account_name')):<>{row.account_name||''}</>}
                 </td>
-                <td style={{...TBL_CS,width:TBL_CW.swap_amount,textAlign:'right',cursor:'pointer',background:bg(row.id,'swap_amount')}} onClick={()=>editCol(row,'swap_amount')}>
+                <td style={{...TBL_CS,width:TBL_CW.swap_amount,textAlign:'center',cursor:'pointer',background:bg(row.id,'swap_amount')}} onClick={()=>editCol(row,'swap_amount')}>
                   {editCell?.id===row.id&&editCell.col==='swap_amount'?renderCell(row,colDef('swap_amount')):<>{row.swap_amount!=null?fmtAmt(Number(row.swap_amount)):''}</>}
                 </td>
                 <td style={{...TBL_CS,width:TBL_CW.swap_name,cursor:'pointer',background:bg(row.id,'swap_name')}} onClick={()=>editCol(row,'swap_name')}>
                   {editCell?.id===row.id&&editCell.col==='swap_name'?renderCell(row,colDef('swap_name')):<>{row.swap_name||''}</>}
                 </td>
-                <td style={{...TBL_CS,width:TBL_CW.difference,textAlign:'right',cursor:'pointer',background:bg(row.id,'difference')}} onClick={()=>editCol(row,'difference')}>
+                <td style={{...TBL_CS,width:TBL_CW.difference,textAlign:'center',cursor:'pointer',background:bg(row.id,'difference')}} onClick={()=>editCol(row,'difference')}>
                   {editCell?.id===row.id&&editCell.col==='difference'?renderCell(row,colDef('difference')):<>{row.difference!=null?fmtAmt(Number(row.difference)):''}</>}
                 </td>
                 <td style={{...TBL_CS,width:TBL_CW.remarks,textAlign:'center',cursor:'pointer',color:remarkColor(row.remarks),background:bg(row.id,'remarks')}} onClick={()=>editCol(row,'remarks')}>
                   {editCell?.id===row.id&&editCell.col==='remarks'?renderCell(row,colDef('remarks')):<>{row.remarks||''}</>}
+                </td>
+                <td style={{width:110,minWidth:110,padding:'0 8px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                  {editCell?.id===row.id&&editCell.col==='commission_type'?renderCell(row,colDef('commission_type')):(()=>{
+                    const ct=row.commission_type||'Inclusive'
+                    const style={Inclusive:{bg:'#d1fae5',color:'#065f46'},Exclusive:{bg:'#dbeafe',color:'#1e40af'},Deferred:{bg:'#fef9c3',color:'#854d0e'}}[ct]||{bg:'#f3f4f6',color:'#374151'}
+                    return <span style={{background:style.bg,color:style.color,padding:'1px 6px',borderRadius:4,fontSize:10,fontWeight:600}}>{ct}</span>
+                  })()}
                 </td>
               </tr>
             ))}
@@ -1487,12 +2112,42 @@ export default function SheetsPage() {
   const auth = useAuth()
   const [allRows, setAllRows]     = useState<TxRow[]>([])  // master — unfiltered
   const [loading, setLoading]     = useState(false)
+  const [customSheets, setCustomSheets] = useState<{ id: string; label: string; themeColor: string; columns: { key: string; label: string }[] }[]>([])
   const [realtimeOk, setRealtimeOk] = useState(false)
   // 'all' = no month filter; otherwise "<year>-<month>"
   const [activeMonthKey, setActiveMonthKey] = useState<string>('all')
   const [colWidths, setColWidths] = useState<Record<string,number>>({})
   const [activeSheet, setActiveSheet] = useState('daily_register')
   const [openTabs, setOpenTabs]   = useState(['daily_register'])
+
+  // Load custom sheets + their columns from Supabase
+  useEffect(() => {
+    async function loadCustomSheets() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const [{ data: sheetData }, { data: colData }] = await Promise.all([
+        supabase.from('sheets').select('sheet_key, label, theme_color').eq('user_id', user.id).eq('is_custom', true).order('created_at', { ascending: true }),
+        supabase.from('sheet_columns').select('sheet_key, column_key, label, column_order').eq('user_id', user.id).order('created_at', { ascending: true }),
+      ])
+      if (sheetData) {
+        setCustomSheets(sheetData.map(s => ({
+          id: s.sheet_key,
+          label: s.label,
+          themeColor: s.theme_color ?? '#7F77DD',
+          columns: (colData ?? [])
+            .filter(c => c.sheet_key === s.sheet_key)
+            .sort((a, b) => (a.column_order ?? 0) - (b.column_order ?? 0))
+            .map(c => ({ key: c.column_key, label: c.label })),
+        })))
+      }
+    }
+    loadCustomSheets()
+  }, [])
+
+  const allLeftSheets = [
+    ...LEFT_SHEETS,
+    ...customSheets.map(s => ({ id: s.id, label: s.label, ready: true })),
+  ]
 
   // Derive dynamic month tabs from actual data
   const monthTabs = useMemo((): MonthTab[] => {
@@ -1708,17 +2363,17 @@ export default function SheetsPage() {
 
     // Column definitions — key names MUST match the row object keys used below
     ws.columns=[
-      {key:'empty',        width:2 },
-      {key:'sr_no',        width:8 },
-      {key:'date',         width:14},
+      {key:'empty',        width:3 },
+      {key:'sr_no',        width:10},
+      {key:'date',         width:16},
       {key:'customer_name',width:24},
       {key:'bank_card',    width:14},
-      {key:'total_amount', width:15},
-      {key:'paid_amount',  width:15},
-      {key:'account_name', width:28},
-      {key:'swap_amount',  width:15},
-      {key:'swap_name',    width:28},
-      {key:'difference',   width:13},
+      {key:'total_amount', width:16},
+      {key:'paid_amount',  width:16},
+      {key:'account_name', width:26},
+      {key:'swap_amount',  width:16},
+      {key:'swap_name',    width:26},
+      {key:'difference',   width:14},
       {key:'remarks',      width:12},
     ]
 
@@ -1752,10 +2407,10 @@ export default function SheetsPage() {
       if(gi>0){
         const sp1=ws.addRow(['','','','','','','','','','','',''])
         sp1.height=15
-        for(let col=1;col<=12;col++){const c=sp1.getCell(col);c.fill={type:'pattern',pattern:'none'} as Fill;c.border={};c.value=null}
+        for(let col=1;col<=12;col++){const c=sp1.getCell(col);c.fill={type:'pattern',pattern:'none'} as Fill;c.border={};c.value=null;c.font={}}
         const sp2=ws.addRow(['','','','','','','','','','','',''])
         sp2.height=15
-        for(let col=1;col<=12;col++){const c=sp2.getCell(col);c.fill={type:'pattern',pattern:'none'} as Fill;c.border={};c.value=null}
+        for(let col=1;col<=12;col++){const c=sp2.getCell(col);c.fill={type:'pattern',pattern:'none'} as Fill;c.border={};c.value=null;c.font={}}
       }
 
       // DATE header row — yellow only on B:L, not full row
@@ -1812,28 +2467,27 @@ export default function SheetsPage() {
       })
     })
 
-    // Totals row
-    const totSpacer=ws.addRow(['','','','','','','','','','','',''])
-    totSpacer.height=15
-    for(let col=1;col<=12;col++){const c=totSpacer.getCell(col);c.fill={type:'pattern',pattern:'none'} as Fill;c.border={};c.value=null}
-    const totRow = ws.addRow({
-      empty:'', sr_no:'', date:'', customer_name:'', bank_card:'TOTAL',
-      total_amount: summary.total,
-      paid_amount:  summary.paid,
-      account_name:'',
-      swap_amount:  summary.swap,
-      swap_name:'',
-      difference: filtered.reduce((s,r)=>s+(r.difference||0),0),
-      remarks:'',
-    })
-    totRow.font={bold:true,size:11,name:'Calibri'}
-    totRow.fill=white
-    totRow.alignment=centerAll
-    AMOUNT_KEYS.forEach(k=>{ totRow.getCell(k).numFmt='#,##0' })
-    applyBorder(totRow)
-
     // Freeze header (first 3 rows of first date group are spacer+date+headers — freeze after row 4 approx)
     ws.views=[{state:'frozen',ySplit:1,xSplit:0}]
+
+    // Clear all columns beyond L (col 12) to prevent ExcelJS spilling borders/fills
+    ws.eachRow(row=>{
+      for(let col=13;col<=50;col++){
+        const c=row.getCell(col)
+        c.value=null
+        c.fill={type:'pattern',pattern:'none'} as import('exceljs').Fill
+        c.border={}
+        c.font={}
+        c.alignment={}
+        c.numFmt=''
+      }
+    })
+    for(let i=13;i<=50;i++){
+      const col=ws.getColumn(i)
+      col.width=0.1
+      col.hidden=true
+    }
+    ws.pageSetup={printArea:'A1:L1000'}
 
     const buf=await wb.xlsx.writeBuffer()
     const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
@@ -1884,11 +2538,24 @@ export default function SheetsPage() {
           </select>
         )
       }
+      if(col.key==='commission_type'){
+        return (
+          <select
+            className="w-full bg-transparent text-xs outline-none border-0"
+            value={editCell.value}
+            onChange={e=>setEditCell(c=>c?{...c,value:e.target.value}:null)}
+            onBlur={commitEdit}
+            autoFocus
+          >
+            {['Inclusive','Exclusive','Deferred'].map(t=><option key={t}>{t}</option>)}
+          </select>
+        )
+      }
       return (
         <input
           ref={editRef}
           className="w-full bg-transparent text-xs outline-none border-0"
-          style={{textAlign:col.align==='right'?'right':'left'}}
+          style={{textAlign:'center'}}
           value={editCell.value}
           onChange={e=>setEditCell(c=>c?{...c,value:e.target.value}:null)}
           onBlur={commitEdit}
@@ -1905,7 +2572,7 @@ export default function SheetsPage() {
           textDecoration: display==='CANCEL'?'line-through':'none',
           background: isFlash?'#bbf7d0':highlight?'#fef08a':'transparent',
           transition:'background 0.4s',
-          textAlign:col.align==='right'?'right':'left',
+          textAlign:'center',
         }}
       >
         {display||<span className="text-[#d1d5db]">—</span>}
@@ -1925,7 +2592,7 @@ export default function SheetsPage() {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto py-1">
-        {LEFT_SHEETS.map(s=>(
+        {allLeftSheets.map(s=>(
           <button key={s.id} onClick={()=>openSheet(s.id)}
             className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[#f0fdf4] transition-colors group relative"
             style={{borderLeft:activeSheet===s.id?'2px solid #3ECF8E':'2px solid transparent',background:activeSheet===s.id?'#f0fdf4':'transparent',color:activeSheet===s.id?'#065f46':'#374151'}}
@@ -1940,6 +2607,10 @@ export default function SheetsPage() {
     </div>
   )
 
+  function sheetLabel(id: string) {
+    return allLeftSheets.find(s => s.id === id)?.label ?? id
+  }
+
   const TabBar = () => (
     <div className="flex items-center gap-0 border-b border-[#e5e7eb] bg-[#f3f4f6] overflow-x-auto">
       {openTabs.map(tid=>(
@@ -1947,7 +2618,7 @@ export default function SheetsPage() {
           className="flex items-center gap-1.5 px-3 py-2 text-xs cursor-pointer border-r border-[#e5e7eb] whitespace-nowrap"
           style={{background:activeSheet===tid?'#fff':'transparent',borderBottom:activeSheet===tid?'2px solid #3ECF8E':'2px solid transparent',color:activeSheet===tid?'#1a1a1a':'#6b7280'}}
         >
-          <Table2 size={11}/>{tid}
+          <Table2 size={11}/>{sheetLabel(tid)}
           <button className="ml-1 hover:bg-gray-200 rounded p-0.5" onClick={e=>closeTab(tid,e)}><X size={9}/></button>
         </div>
       ))}
@@ -1978,6 +2649,18 @@ export default function SheetsPage() {
     )
   }
 
+  if(activeSheet==='chamunda_sheet') {
+    return (
+      <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
+        <LeftPanel/>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <TabBar/>
+          <ChamundaSheetView/>
+        </div>
+      </div>
+    )
+  }
+
   if(activeSheet==='customer_sheet') {
     return (
       <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
@@ -1991,12 +2674,25 @@ export default function SheetsPage() {
   }
 
   if(activeSheet!=='daily_register') {
+    const customSheet = customSheets.find(s => s.id === activeSheet)
+    if (customSheet) {
+      return (
+        <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
+          <LeftPanel/>
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+            <TabBar/>
+            <CustomSheetView sheet={{...customSheet, themeColor: customSheet.themeColor ?? '#7F77DD'}}/>
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
         <LeftPanel/>
         <div className="flex-1 flex flex-col">
           <TabBar/>
-          <ComingSoon name={activeSheet}/>
+          <ComingSoon name={sheetLabel(activeSheet)}/>
         </div>
       </div>
     )
@@ -2013,7 +2709,7 @@ export default function SheetsPage() {
           </div>
         </div>
         <div className="flex-1 overflow-y-auto py-1">
-          {LEFT_SHEETS.map(s=>(
+          {allLeftSheets.map(s=>(
             <button key={s.id} onClick={()=>openSheet(s.id)}
               className="w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-[#f0fdf4] transition-colors group relative"
               style={{borderLeft:activeSheet===s.id?'2px solid #3ECF8E':'2px solid transparent',background:activeSheet===s.id?'#f0fdf4':'transparent',color:activeSheet===s.id?'#065f46':'#374151'}}
@@ -2037,7 +2733,7 @@ export default function SheetsPage() {
               className="flex items-center gap-1.5 px-3 py-2 text-xs cursor-pointer border-r border-[#e5e7eb] whitespace-nowrap"
               style={{background:activeSheet===tid?'#fff':'transparent',borderBottom:activeSheet===tid?'2px solid #3ECF8E':'2px solid transparent',color:activeSheet===tid?'#1a1a1a':'#6b7280'}}
             >
-              <Table2 size={11}/>{tid}
+              <Table2 size={11}/>{sheetLabel(tid)}
               <button className="ml-1 hover:bg-gray-200 rounded p-0.5" onClick={e=>closeTab(tid,e)}><X size={9}/></button>
             </div>
           ))}
