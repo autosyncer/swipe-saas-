@@ -21,23 +21,27 @@ export interface AcSheetRow {
 export async function getOpeningBalance(accountName: string, date: string): Promise<number> {
   const supabase = createClient()
 
-  const { data } = await supabase
-    .from('ac_sheet')
-    .select('closing_bal, date')
-    .eq('account_name', accountName)
-    .lt('date', date)
-    .order('date', { ascending: false })
-    .limit(1)
+  try {
+    const { data } = await supabase
+      .from('ac_sheet')
+      .select('closing_bal, date')
+      .eq('account_name', accountName)
+      .lt('date', date)
+      .order('date', { ascending: false })
+      .limit(1)
+    if (data && data.length > 0) return Number(data[0].closing_bal) || 0
+  } catch { /* table not ready yet */ }
 
-  if (data && data.length > 0) return Number(data[0].closing_bal) || 0
+  try {
+    const { data: master } = await supabase
+      .from('bank_account_master')
+      .select('current_balance, opening_balance')
+      .eq('account_name', accountName)
+      .single()
+    return Number(master?.current_balance ?? master?.opening_balance) || 0
+  } catch { /* column may not exist yet */ }
 
-  const { data: master } = await supabase
-    .from('bank_account_master')
-    .select('current_balance')
-    .eq('account_name', accountName)
-    .single()
-
-  return Number(master?.current_balance) || 0
+  return 0
 }
 
 export async function loadAcSheet(date: string): Promise<AcSheetRow[]> {

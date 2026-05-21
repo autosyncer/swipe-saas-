@@ -1,42 +1,27 @@
-import { supabase } from '@/lib/supabase'
+import { createAdminClient } from '@/lib/supabase/admin-client'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function saveTransactionToStorage(transaction: Record<string, any>): Promise<void> {
   try {
+    // Use service role to bypass storage RLS
+    const admin = createAdminClient()
     const today = new Date().toISOString().split('T')[0]
     const dailyBackupPath = `daily/${today}/transactions.json`
 
-    // Fetch existing today's file from storage
     let existing: Record<string, unknown>[] = []
     try {
-      const { data: existingFile } = await supabase.storage
-        .from('backups')
-        .download(dailyBackupPath)
-      if (existingFile) {
-        const text = await existingFile.text()
-        existing = JSON.parse(text)
-      }
-    } catch {
-      // First entry of the day
-    }
+      const { data: existingFile } = await admin.storage.from('backups').download(dailyBackupPath)
+      if (existingFile) existing = JSON.parse(await existingFile.text())
+    } catch { /* first entry of day */ }
 
     existing.push({ ...transaction, backed_up_at: new Date().toISOString() })
 
     const blob = new Blob([JSON.stringify(existing, null, 2)], { type: 'application/json' })
-    const file = new File([blob], 'transactions.json', { type: 'application/json' })
-
-    const { error } = await supabase.storage
+    const { error } = await admin.storage
       .from('backups')
-      .upload(dailyBackupPath, file, { upsert: true })
+      .upload(dailyBackupPath, new File([blob], 'transactions.json', { type: 'application/json' }), { upsert: true })
 
-    if (error) {
-      console.error('Transaction backup storage error:', error.message)
-    } else {
-      console.log(`✅ Transaction SR#${transaction.sr_no} backed up → Supabase Storage`)
-      localStorage.setItem('last_transaction_backup', new Date().toISOString())
-    }
-  } catch (err) {
-    // Silent — never interrupt the user
-    console.error('Transaction backup error:', err)
-  }
+    if (error) console.error('Transaction backup error:', error.message)
+    else localStorage.setItem('last_transaction_backup', new Date().toISOString())
+  } catch { /* silent — never interrupt user */ }
 }
