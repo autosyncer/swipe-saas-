@@ -8,6 +8,7 @@ import { Transaction, Customer, Card } from '@/types/database'
 import { logAction } from '@/lib/audit-log'
 import { runRiskDetection } from '@/lib/risk-engine'
 import { updateAcSheetFromTransaction } from '@/lib/ac-sheet'
+import { createCCSheetRow, createChamundaSheetRow, createCustomerSheetRow as createCustomerSheetRowHelper } from '@/lib/sheet-helpers'
 import { saveTransactionToStorage } from '@/lib/transaction-backup'
 
 const ACCOUNT_OPTIONS = [
@@ -341,93 +342,6 @@ function EntryPageInner() {
     setGeneratingInvoice(false)
   }
 
-  async function createCCSheetRow(transaction: Record<string, unknown>) {
-    try {
-      const swapName = String(transaction.swap_name || '')
-      const { data: machines } = await supabase.from('swipe_machines').select('*')
-      let matchedMachine: Record<string, unknown> | null = null
-      if (machines && swapName) {
-        matchedMachine = (machines as Record<string, unknown>[]).find(m =>
-          swapName.toUpperCase().includes(String(m.machine_name).toUpperCase()) ||
-          swapName.toUpperCase().includes(String(m.account_name).toUpperCase())
-        ) || null
-      }
-      const swipeAmount = Number(transaction.swap_amount) || Number(transaction.total_amount) || 0
-      const bankCommPct = matchedMachine ? Number(matchedMachine.bank_commission_pct) : 1.320
-      const bankCommission = (swipeAmount * bankCommPct) / 100
-      const ourCommission = Number(transaction.commission_amount) || (swipeAmount * (Number(transaction.commission_pct) || 2.2) / 100)
-      const customerAmount = swipeAmount - bankCommission
-      const ccRow = {
-        transaction_id: transaction.id,
-        machine_id: matchedMachine ? matchedMachine.id : null,
-        tid: matchedMachine ? String(matchedMachine.tid) : '',
-        machine_name: matchedMachine ? String(matchedMachine.machine_name) : swapName,
-        date: transaction.date,
-        swipe_amount: swipeAmount,
-        customer_amount: customerAmount,
-        bank_commission: bankCommission,
-        our_commission: ourCommission,
-        status: String(transaction.remarks || ''),
-        customer_name: String(transaction.customer_name || ''),
-        agent_code: matchedMachine ? String(matchedMachine.agent_code || '') : '',
-        account_name: String(transaction.account_name || ''),
-      }
-      const { error } = await supabase.from('cc_sheet').insert(ccRow)
-      if (error) console.error('[CC Sheet] insert error:', error.message)
-      else console.log('[CC Sheet] row created for SR:', transaction.sr_no)
-    } catch (err) {
-      console.error('[CC Sheet] auto-generation error:', err)
-    }
-  }
-
-  async function createCustomerSheetRow(transaction: Record<string, unknown>) {
-    try {
-      let cardNumber = '', pin = '', cvvExpiry = '', dueDate: string | null = null, cardNetwork = ''
-      const customerId = transaction.customer_id as string | null
-      const bankCard = String(transaction.bank_card || '')
-      if (customerId && bankCard) {
-        const { data: cards } = await supabase.from('cards').select('*').eq('customer_id', customerId).ilike('bank_name', `%${bankCard}%`).limit(1)
-        if (cards && cards.length > 0) {
-          const c = cards[0] as Record<string, unknown>
-          cardNumber = String(c.card_number || '')
-          pin = String(c.pin || '')
-          cvvExpiry = c.cvv ? `${c.cvv}/${c.expiry || ''}` : String(c.expiry || '')
-          dueDate = c.due_date ? String(c.due_date) : null
-          cardNetwork = String(c.card_type || '')
-        }
-      }
-      const totalAmt = Number(transaction.total_amount) || 0
-      const paidAmt = Number(transaction.paid_amount) || 0
-      const swapAmt = Number(transaction.swap_amount) || 0
-      const commission = Number(transaction.commission_amount) || 0
-      const { error } = await supabase.from('customer_sheet').insert({
-        transaction_id: transaction.id || null,
-        customer_id: customerId || null,
-        customer_name: String(transaction.customer_name || ''),
-        due_date: dueDate,
-        card: bankCard,
-        card_number: cardNumber,
-        pin,
-        cvv_expiry: cvvExpiry,
-        total_amount: totalAmt,
-        paid_amount: paidAmt,
-        swap_amount: swapAmt,
-        commission,
-        paid_remaining: totalAmt - paidAmt,
-        swap_pending: swapAmt - totalAmt,
-        account_name: String(transaction.account_name || ''),
-        swap_name: String(transaction.swap_name || ''),
-        paid_date: transaction.remarks === 'PAID' ? String(transaction.date || '') : null,
-        card_network: cardNetwork,
-        date: String(transaction.date || new Date().toISOString().split('T')[0]),
-      })
-      if (error) console.error('[Customer Sheet] insert error:', error.message)
-      else console.log('[Customer Sheet] row created for:', transaction.customer_name)
-    } catch (err) {
-      console.error('[Customer Sheet] auto-generation error:', err)
-    }
-  }
-
   async function generateInvoice(
     transaction: Record<string, unknown>,
     items: { commodity_id: string; name: string; unit: string; qty: number; price: number; subtotal: number }[]
@@ -587,8 +501,9 @@ function EntryPageInner() {
       })
       fetchTodayEntries()
       if (newTransaction) {
-        createCCSheetRow(newTransaction)
-        createCustomerSheetRow({ ...(newTransaction as Record<string, unknown>), customer_id: snapCustomer?.id || null })
+        createCCSheetRow(newTransaction as Record<string, unknown>)
+        createChamundaSheetRow(newTransaction as Record<string, unknown>)
+        createCustomerSheetRowHelper(newTransaction as Record<string, unknown>, snapCustomer?.id || null)
         updateAcSheetFromTransaction({
           date: newTransaction.date,
           account_name: newTransaction.account_name,
