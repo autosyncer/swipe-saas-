@@ -33,13 +33,17 @@ export async function getOpeningBalance(accountName: string, date: string): Prom
   } catch { /* table not ready yet */ }
 
   try {
+    // Select all columns, pick balance from whichever exists
     const { data: master } = await supabase
       .from('bank_account_master')
-      .select('current_balance, opening_balance')
+      .select('*')
       .eq('account_name', accountName)
       .single()
-    return Number(master?.current_balance ?? master?.opening_balance) || 0
-  } catch { /* column may not exist yet */ }
+    if (master) {
+      const row = master as Record<string, unknown>
+      return Number(row.current_balance ?? row.opening_balance ?? row.balance) || 0
+    }
+  } catch { /* table/column not ready yet */ }
 
   return 0
 }
