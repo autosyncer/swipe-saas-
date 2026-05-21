@@ -80,6 +80,7 @@ export default function TransactionForm({ onSuccess }: Props) {
     swap_name: '',
     remarks: 'Pending' as string,
     commission_pct: '',
+    commission_type: 'Inclusive' as string,
   })
 
   // Load field mappings saved by the mapping editor
@@ -217,33 +218,35 @@ export default function TransactionForm({ onSuccess }: Props) {
         ? applyMappingsToSheets(formDataMap, savedMappings)
         : {}
 
-      const payload = {
+      const supabase = createClient()
+      const txPayload = {
         date: form.date,
-        customer_id: selectedCustomer?.id,
+        customer_id: selectedCustomer?.id ?? null,
         customer_name: selectedCustomer?.name ?? query,
         bank_card: form.bank_card,
         total_amount: parseFloat(form.total_amount),
         paid_amount: parseFloat(form.paid_amount),
         account_name: form.account_name,
-        swap_amount: form.swap_amount ? parseFloat(form.swap_amount) : undefined,
+        swap_amount: form.swap_amount ? parseFloat(form.swap_amount) : null,
         swap_name: form.swap_name,
         remarks: form.remarks,
-        status: form.remarks as 'Paid' | 'Unpaid' | 'Pending' | 'Puru',
-        commission_pct: form.commission_pct ? parseFloat(form.commission_pct) : undefined,
-        // Mapping-derived per-sheet values (used by sheet write logic)
-        field_mappings: sheetData,
+        commission_pct: form.commission_pct ? parseFloat(form.commission_pct) : null,
+        commission_type: form.commission_type,
       }
 
-      const supabase = createClient()
-      const { field_mappings: _fm, ...txPayload } = payload as Record<string, unknown> & { field_mappings?: unknown }
+      console.log('[TransactionForm] inserting:', txPayload)
       const { data: txData, error: txError } = await supabase
         .from('transactions')
         .insert(txPayload)
         .select()
         .single()
 
-      if (txError) throw new Error(txError.message)
+      if (txError) {
+        console.error('[TransactionForm] insert error:', txError)
+        throw new Error(txError.message)
+      }
 
+      console.log('[TransactionForm] inserted:', txData)
       showToast('Transaction added successfully!', 'success')
       if (txData) {
         const d = txData as Record<string, unknown>
@@ -260,7 +263,7 @@ export default function TransactionForm({ onSuccess }: Props) {
       setSelectedCard(null)
       setSelectedAccount(null)
       setSelectedMachine(null)
-      setForm({ date: today(), bank_card: '', total_amount: '', paid_amount: '', account_name: '', swap_amount: '', swap_name: '', remarks: 'Pending', commission_pct: '' })
+      setForm({ date: today(), bank_card: '', total_amount: '', paid_amount: '', account_name: '', swap_amount: '', swap_name: '', remarks: 'Pending', commission_pct: '', commission_type: 'Inclusive' })
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Error submitting', 'error')
     } finally {

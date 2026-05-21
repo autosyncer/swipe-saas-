@@ -50,11 +50,10 @@ export async function createChamundaSheetRow(transaction: Record<string, unknown
     if (commType === 'Exclusive') commStr = `CH ${commPct}`
     if (commType === 'Deferred')  commStr = 'PAY PURU'
 
-    const { error } = await supabase.from('chamunda_sheet').insert({
+    const row: Record<string, unknown> = {
       date,
       row_type: 'transaction',
       transaction_id: transaction.id || null,
-      name: String(transaction.customer_name || ''),
       bank_charge_pct: 3.00,
       paid_amount: Number(transaction.paid_amount) || 0,
       swap_amount: Number(transaction.swap_amount) || 0,
@@ -62,7 +61,13 @@ export async function createChamundaSheetRow(transaction: Record<string, unknown
       commission_type: commStr,
       machine_name: String(transaction.swap_name || ''),
       sort_order: Date.now(),
-    })
+    }
+
+    // Try 'name' column first; fall back to 'card_holder' if SQL migration not yet run
+    let { error } = await supabase.from('chamunda_sheet').insert({ ...row, name: String(transaction.customer_name || '') })
+    if (error?.message?.includes('column') && error.message.includes('name')) {
+      ;({ error } = await supabase.from('chamunda_sheet').insert({ ...row, card_holder: String(transaction.customer_name || '') }))
+    }
 
     if (error) {
       console.error('❌ Chamunda insert failed:', error.message)
