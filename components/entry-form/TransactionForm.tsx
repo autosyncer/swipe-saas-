@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { ACCOUNT_NAMES, today } from '@/lib/utils'
 import { applyMappingsToSheets, migrateOldMappings, type MappingState } from '@/components/FieldMappingEditor'
 import { createClient } from '@/lib/supabase/client'
+import { createCCSheetRow, createChamundaSheetRow, createCustomerSheetRow } from '@/lib/sheet-helpers'
 
 interface Card {
   id: string
@@ -233,19 +234,25 @@ export default function TransactionForm({ onSuccess }: Props) {
         field_mappings: sheetData,
       }
 
-      const res = await fetch(`${API}/api/transactions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
+      const supabase = createClient()
+      const { field_mappings: _fm, ...txPayload } = payload as Record<string, unknown> & { field_mappings?: unknown }
+      const { data: txData, error: txError } = await supabase
+        .from('transactions')
+        .insert(txPayload)
+        .select()
+        .single()
 
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error || 'Failed')
+      if (txError) throw new Error(txError.message)
 
       showToast('Transaction added successfully!', 'success')
-      // Write dedicated customer sheet row
-      if (json.transaction) writeCustomerSheetRow(json.transaction, selectedCustomer, selectedCard)
-      onSuccess?.(json.transaction)
+      if (txData) {
+        const d = txData as Record<string, unknown>
+        createCCSheetRow(d)
+        createChamundaSheetRow(d)
+        createCustomerSheetRow(d, selectedCustomer?.id ?? null)
+        writeCustomerSheetRow(d, selectedCustomer, selectedCard)
+      }
+      onSuccess?.(txData)
 
       // Reset form
       setQuery('')
