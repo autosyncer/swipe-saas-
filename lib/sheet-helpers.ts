@@ -62,7 +62,6 @@ export async function createChamundaSheetRow(transaction: Record<string, unknown
       commission_pct: commPct,
       commission_type: commStr,
       machine_name: String(transaction.swap_name || ''),
-      sort_order: Date.now(),
     }
 
     // Try 'name' column first; fall back to 'card_holder' if SQL migration not yet run

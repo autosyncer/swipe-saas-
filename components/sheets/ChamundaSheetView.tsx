@@ -146,7 +146,6 @@ export default function ChamundaSheetView() {
         commission_pct: commPct,
         commission_type: commStr,
         machine_name: transaction.swap_name || '',
-        sort_order: Date.now(),
       }).select()
       if (error) { console.error('❌ Sync insert failed:', error.message, error.details); return }
       console.log('✅ Sync chamunda row:', data)
