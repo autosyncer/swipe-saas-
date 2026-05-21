@@ -42,7 +42,9 @@ export async function createCCSheetRow(transaction: Record<string, unknown>) {
 export async function createChamundaSheetRow(transaction: Record<string, unknown>) {
   try {
     const date = String(transaction.date || '')
-    await supabase.rpc('initialize_chamunda_sheet', { p_date: date })
+    console.log('[Chamunda] createChamundaSheetRow called for date:', date)
+    const { error: rpcErr } = await supabase.rpc('initialize_chamunda_sheet', { p_date: date })
+    if (rpcErr) console.warn('[Chamunda] initialize RPC error (non-fatal):', rpcErr.message)
 
     const commPct  = Number(transaction.commission_pct) || 0
     const commType = String(transaction.commission_type || 'Inclusive')
@@ -70,9 +72,10 @@ export async function createChamundaSheetRow(transaction: Record<string, unknown
     }
 
     if (error) {
-      console.error('❌ Chamunda insert failed:', error.message)
+      console.error('❌ Chamunda insert failed:', error.message, error.details, error.hint)
       return
     }
+    console.log('✅ Chamunda row inserted for date:', date)
     await supabase.rpc('recalculate_chamunda_totals', { p_date: date })
   } catch (err) {
     console.error('❌ createChamundaSheetRow exception:', err)
