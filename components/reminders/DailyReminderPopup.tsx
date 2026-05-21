@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { X, MessageCircle, Phone, Calendar, Clock } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ export function DailyReminderPopup() {
 
   const fetchAlerts = async (today: string) => {
     try {
-      const supabase = createClient()
+      
       const in7days = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0]
 
       const [{ data: pendingReminders }, { data: cardDues }] = await Promise.all([

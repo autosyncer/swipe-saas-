@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 
 interface AlertPayload {
   alert_type: string
@@ -10,7 +10,7 @@ interface AlertPayload {
 }
 
 const createAlertIfNotExists = async (alert: AlertPayload) => {
-  const supabase = createClient()
+  
 
   const { data: existing } = await supabase
     .from('risk_alerts')
@@ -32,7 +32,7 @@ const createAlertIfNotExists = async (alert: AlertPayload) => {
 }
 
 export const runRiskDetection = async (): Promise<number> => {
-  const supabase = createClient()
+  
   const today = new Date().toISOString().split('T')[0]
   const last7days = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
     .toISOString().split('T')[0]

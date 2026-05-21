@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { logAction } from '@/lib/audit-log'
 import {
   ChevronLeft, ChevronRight, Plus, X, Calendar, List,
@@ -92,7 +92,7 @@ function getFirstDayOfMonth(year: number, month: number) {
 // ─── Fetch ────────────────────────────────────────────────────────────────────
 
 async function fetchMonthData(year: number, month: number): Promise<Record<string, Reminder[]>> {
-  const supabase = createClient()
+  
   const startDate = toIsoDate(new Date(year, month, 1))
   const endDate = toIsoDate(new Date(year, month + 1, 0))
 
@@ -144,7 +144,7 @@ async function fetchMonthData(year: number, month: number): Promise<Record<strin
 }
 
 async function fetchUpcomingList(days: number): Promise<Reminder[]> {
-  const supabase = createClient()
+  
   const today = toIsoDate(new Date())
   const future = toIsoDate(new Date(Date.now() + days * 86400000))
 
@@ -195,7 +195,7 @@ async function fetchUpcomingList(days: number): Promise<Reminder[]> {
 }
 
 async function fetchOverdue(): Promise<{ count: number; items: Reminder[] }> {
-  const supabase = createClient()
+  
   const today = toIsoDate(new Date())
 
   const [{ data: overdueReminders }, { data: overdueCards }] = await Promise.all([
@@ -518,7 +518,7 @@ function AddReminderModal({
     if (customerQuery.length < 2) { setCustomerSuggestions([]); return }
     if (searchRef.current) clearTimeout(searchRef.current)
     searchRef.current = setTimeout(async () => {
-      const supabase = createClient()
+      
       const { data } = await supabase
         .from('customers')
         .select('id, name, phone, outstanding_balance, default_charge_pct, cards(id, bank_name, last4, due_date, card_type)')
@@ -575,7 +575,7 @@ function AddReminderModal({
 
     setSaving(true)
     try {
-      const supabase = createClient()
+      
 
       const payload = {
         title: autoTitle || `Reminder — ${selectedCustomer.name}`,
@@ -823,7 +823,7 @@ function SnoozeModal({
 
   const handleSnooze = async () => {
     setSaving(true)
-    const supabase = createClient()
+    
     await supabase.from('reminders').update({ reminder_date: newDate, status: 'snoozed' }).eq('id', reminder.id)
     setSaving(false)
     onSaved()
@@ -901,7 +901,7 @@ export default function RemindersPage() {
 
   const handleDone = async (r: Reminder) => {
     if (r.source === 'card') return // card reminders are auto, can't mark done here
-    const supabase = createClient()
+    
     await supabase.from('reminders').update({ status: 'done' }).eq('id', r.id)
     await logAction({ action: 'Reminder Completed', module: 'Reminders', details: { title: r.title, date: r.reminder_date, customer: r.customer_name ?? '' } })
     loadMonth()
@@ -911,7 +911,7 @@ export default function RemindersPage() {
 
   const handleDelete = async (r: Reminder) => {
     if (r.source === 'card') return
-    const supabase = createClient()
+    
     await supabase.from('reminders').delete().eq('id', r.id)
     loadMonth()
     loadList()

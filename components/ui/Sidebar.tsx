@@ -8,7 +8,7 @@ import {
   FileText, Bell, AlertTriangle, BarChart2, List, Grid, Settings, Landmark, Package, Receipt, Workflow
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 
 const navGroups = [
   [
@@ -45,7 +45,7 @@ export default function Sidebar() {
   const [reminderCount, setReminderCount] = useState(0)
 
   useEffect(() => {
-    const supabase = createClient()
+    
 
     const fetchAlertCount = async () => {
       const { count } = await supabase

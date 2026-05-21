@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
 import { logAction } from '@/lib/audit-log'
 import {
@@ -9,7 +9,7 @@ import {
   ChevronDown, Filter, CheckCircle, Clock, Ban, FileText
 } from 'lucide-react'
 
-const supabase = createClient()
+
 
 interface InvoiceItem {
   commodity_id: string

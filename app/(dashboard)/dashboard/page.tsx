@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { BarChart, Bar, ResponsiveContainer, Tooltip } from 'recharts'
 import { CheckCircle, Download, TrendingUp, RefreshCw, X, Search, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { createClient } from '@/lib/supabase/client'
 import { Transaction } from '@/types/database'
 import { BackupStatusWidget } from '@/components/backup/BackupStatusWidget'
 
@@ -95,7 +94,7 @@ function CustomerStatementModal({ onClose, onGenerate, loading }: {
 
   const searchCustomers = useCallback(async (q: string) => {
     if (!q.trim()) { setCustomers([]); return }
-    const sb = createClient()
+    const sb = supabase
     const { data } = await sb.from('customers').select('id, name').ilike('name', `%${q}%`).limit(10)
     setCustomers((data as CustomerOption[]) || [])
     setShowDropdown(true)
@@ -276,7 +275,7 @@ export default function DashboardPage() {
     setLoadingPL(true)
     try {
       const today = todayStr()
-      const sb = createClient()
+      const sb = supabase
       const { data: txns } = await sb.from('transactions').select('*').eq('date', today).order('sr_no', { ascending: true })
       const rows = (txns || []) as Transaction[]
 
@@ -374,7 +373,7 @@ export default function DashboardPage() {
   const exportCustomerStatement = async (customerId: string, customerName: string, from: string, to: string) => {
     setLoadingCustomer(true)
     try {
-      const sb = createClient()
+      const sb = supabase
 
       // Fetch customer + cards in parallel, resolve transactions with id→name fallback
       const [{ data: custData }, { data: cards }] = await Promise.all([
@@ -533,7 +532,7 @@ export default function DashboardPage() {
   const exportCommissionSummary = async (from: string, to: string) => {
     setLoadingCommission(true)
     try {
-      const sb = createClient()
+      const sb = supabase
       const { data: txns } = await sb.from('transactions').select('*').gte('date', from).lte('date', to).order('date', { ascending: true })
       const rows = (txns || []) as Transaction[]
 

@@ -16,7 +16,7 @@ const FieldMappingEditor = dynamic(
     ),
   }
 )
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { FORM_FIELDS } from '@/lib/sheet-definitions'
 
 export default function MappingPage() {
@@ -26,7 +26,7 @@ export default function MappingPage() {
   // Load saved mappings from Supabase on mount
   useEffect(() => {
     async function loadMappings() {
-      const supabase = createClient()
+      
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
         setInitialMappings({ rules: [], conditions: [], lastUpdated: new Date().toISOString(), version: 0 })
@@ -68,7 +68,7 @@ export default function MappingPage() {
     // Mirror to localStorage for TransactionForm to read
     try { localStorage.setItem('field_mapping_rules', JSON.stringify(mappings)) } catch { /* quota */ }
 
-    const supabase = createClient()
+    
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 

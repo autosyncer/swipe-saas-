@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 
 export const logAction = async ({
   action,
@@ -10,7 +10,7 @@ export const logAction = async ({
   details?: Record<string, unknown>
 }): Promise<void> => {
   try {
-    const supabase = createClient()
+    
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { runRiskDetection } from '@/lib/risk-engine'
 import { logAction } from '@/lib/audit-log'
 import {
@@ -322,7 +322,7 @@ export default function AlertsPage() {
   const [dismissTarget, setDismissTarget] = useState<RiskAlert | null>(null)
 
   const fetchAlerts = useCallback(async () => {
-    const supabase = createClient()
+    
     setLoading(true)
     const { data } = await supabase
       .from('risk_alerts')
@@ -354,7 +354,7 @@ export default function AlertsPage() {
 
   // Realtime subscription
   useEffect(() => {
-    const supabase = createClient()
+    
     const channel = supabase
       .channel('risk_alerts_realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'risk_alerts' }, () => {
@@ -381,7 +381,7 @@ export default function AlertsPage() {
   }
 
   const handleReview = async (alert: RiskAlert) => {
-    const supabase = createClient()
+    
     await supabase
       .from('risk_alerts')
       .update({ reviewed_at: new Date().toISOString() })
@@ -391,7 +391,7 @@ export default function AlertsPage() {
 
   const handleDismissConfirm = async (reason: string, notes: string) => {
     if (!dismissTarget) return
-    const supabase = createClient()
+    
     await supabase
       .from('risk_alerts')
       .update({ is_dismissed: true })

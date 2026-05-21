@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 
 const navItems = [
@@ -21,7 +21,7 @@ interface Props {
 export default function SidebarNav({ userName, userRole }: Props) {
   const pathname = usePathname()
   const router = useRouter()
-  const supabase = createClient()
+  
 
   async function handleLogout() {
     await supabase.auth.signOut()

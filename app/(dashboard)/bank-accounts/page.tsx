@@ -5,7 +5,7 @@ import {
   Plus, RefreshCw, Pencil, Trash2, Check, X,
   ChevronDown, ChevronUp, Building2, Search,
 } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { logAction } from '@/lib/audit-log'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ function AccountPanel({
     if (!form.commission_pct) { setError('Commission % is required'); return }
     setError('')
     setSaving(true)
-    const supabase = createClient()
+    
     const payload = {
       account_name: form.account_name.trim().toUpperCase(),
       bank_name: form.bank_name.trim().toUpperCase(),
@@ -265,7 +265,7 @@ function DeleteConfirm({ account, onClose, onDeleted }: { account: BankAccount; 
   const [deleting, setDeleting] = useState(false)
   async function confirm() {
     setDeleting(true)
-    const supabase = createClient()
+    
     await supabase.from('bank_account_master').delete().eq('id', account.id)
     logAction({ action: 'Bank Account Deleted', module: 'Bank Accounts', details: { account_name: account.account_name } }).catch(() => {})
     onDeleted()
@@ -457,7 +457,7 @@ export default function BankAccountsPage() {
 
   const fetchAccounts = useCallback(async () => {
     setLoading(true)
-    const supabase = createClient()
+    
     const { data } = await supabase.from('bank_account_master').select('*').order('account_name')
     setAccounts((data as BankAccount[]) || [])
     setLoading(false)
@@ -466,7 +466,7 @@ export default function BankAccountsPage() {
   useEffect(() => { fetchAccounts() }, [fetchAccounts])
 
   async function refreshExpandedAccount(accountName: string) {
-    const supabase = createClient()
+    
     const today = new Date().toISOString().split('T')[0]
     const last7 = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
     const [{ data: todayAC }, { data: recentTxns }] = await Promise.all([
@@ -478,7 +478,7 @@ export default function BankAccountsPage() {
 
   async function toggleStatus(e: React.MouseEvent, acc: BankAccount) {
     e.stopPropagation()
-    const supabase = createClient()
+    
     await supabase.from('bank_account_master').update({ is_active: !acc.is_active }).eq('id', acc.id)
     showToast(acc.is_active ? `${acc.account_name} deactivated` : `${acc.account_name} activated`, 'success')
     fetchAccounts()
@@ -495,7 +495,7 @@ export default function BankAccountsPage() {
 
   async function handleAddAmount(accountName: string) {
     if (!addAmount || parseFloat(addAmount) <= 0) { showToast('Enter valid amount', 'error'); return }
-    const supabase = createClient()
+    
     const today = new Date().toISOString().split('T')[0]
     const amount = parseFloat(addAmount)
     try {

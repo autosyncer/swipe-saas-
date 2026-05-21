@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { Search, Download, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
 import ExcelJS from 'exceljs'
 
@@ -119,7 +119,7 @@ export default function LogsPage() {
 
   const fetchLogs = useCallback(async () => {
     setLoading(true)
-    const supabase = createClient()
+    
     let query = supabase
       .from('audit_logs')
       .select('*')
@@ -139,7 +139,7 @@ export default function LogsPage() {
   }, [filters])
 
   useEffect(() => {
-    const supabase = createClient()
+    
     supabase.from('profiles').select('id, full_name, email').then(({ data }) => {
       setUserOptions((data as UserOption[]) || [])
     })
@@ -149,7 +149,7 @@ export default function LogsPage() {
 
   // Today's stats (independent of date filters)
   useEffect(() => {
-    const supabase = createClient()
+    
     supabase.from('audit_logs')
       .select('*')
       .gte('created_at', today + 'T00:00:00')
@@ -159,7 +159,7 @@ export default function LogsPage() {
 
   // Realtime
   useEffect(() => {
-    const supabase = createClient()
+    
     const ch = supabase.channel('audit-logs-rt')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'audit_logs' }, () => {
         fetchLogs()

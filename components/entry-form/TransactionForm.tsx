@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { ACCOUNT_NAMES, today } from '@/lib/utils'
 import { applyMappingsToSheets, migrateOldMappings, type MappingState } from '@/components/FieldMappingEditor'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { createCCSheetRow, createChamundaSheetRow, createCustomerSheetRow } from '@/lib/sheet-helpers'
 
 interface Card {
@@ -94,7 +94,7 @@ export default function TransactionForm({ onSuccess }: Props) {
   // Fetch full bank account details when account_name is selected
   useEffect(() => {
     if (!form.account_name) { setSelectedAccount(null); return }
-    const supabase = createClient()
+    
     supabase.from('bank_accounts').select('*').eq('account_name', form.account_name).single()
       .then(({ data }) => setSelectedAccount(data ?? null))
   }, [form.account_name])
@@ -102,7 +102,7 @@ export default function TransactionForm({ onSuccess }: Props) {
   // Fetch swap machine details when swap_name is filled
   useEffect(() => {
     if (!form.swap_name) { setSelectedMachine(null); return }
-    const supabase = createClient()
+    
     supabase.from('swipe_machines').select('*').ilike('machine_name', form.swap_name).limit(1)
       .then(({ data }) => setSelectedMachine(data?.[0] ?? null))
   }, [form.swap_name])
@@ -218,7 +218,7 @@ export default function TransactionForm({ onSuccess }: Props) {
         ? applyMappingsToSheets(formDataMap, savedMappings)
         : {}
 
-      const supabase = createClient()
+      
       const txPayload = {
         date: form.date,
         customer_id: selectedCustomer?.id ?? null,
@@ -422,7 +422,7 @@ async function writeCustomerSheetRow(
   card: { last4: string | null; bank_name: string | null; card_nickname: string | null } | null,
 ) {
   try {
-    const supabase = createClient()
+    
     let cardNumber = '', pin = '', cvvExpiry = '', dueDate: string | null = null, cardNetwork = ''
 
     // Fetch full card details if we have a customer + bank_card reference

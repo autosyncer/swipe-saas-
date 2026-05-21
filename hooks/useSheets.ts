@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { BUILT_IN_SHEETS, type SheetDef } from '@/lib/sheet-definitions'
 
 export interface SheetColumn {
@@ -27,7 +27,7 @@ export function useSheets() {
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
-    const supabase = createClient()
+    
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setLoading(false); return }
 
@@ -85,7 +85,7 @@ export function useSheets() {
   useEffect(() => { load() }, [load])
 
   const addSheet = useCallback(async (label: string, themeColor: string): Promise<string | undefined> => {
-    const supabase = createClient()
+    
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return undefined
     const sheet_key = `custom_${label.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}`
@@ -103,7 +103,7 @@ export function useSheets() {
   }, [load])
 
   const addColumn = useCallback(async (sheetKey: string, label: string): Promise<string | undefined> => {
-    const supabase = createClient()
+    
     const { data: { user }, error: authErr } = await supabase.auth.getUser()
     if (authErr || !user) {
       console.error('addColumn: not authenticated', authErr)
@@ -139,7 +139,7 @@ export function useSheets() {
   }, [load])
 
   const deleteSheet = useCallback(async (sheetKey: string): Promise<void> => {
-    const supabase = createClient()
+    
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     await Promise.all([
@@ -150,7 +150,7 @@ export function useSheets() {
   }, [load])
 
   const deleteColumn = useCallback(async (sheetKey: string, columnKey: string): Promise<void> => {
-    const supabase = createClient()
+    
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     await supabase.from('sheet_columns').delete()
@@ -159,7 +159,7 @@ export function useSheets() {
   }, [load])
 
   const renameSheet = useCallback(async (sheetKey: string, newLabel: string): Promise<void> => {
-    const supabase = createClient()
+    
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     await supabase.from('sheets').update({ label: newLabel })
@@ -193,7 +193,7 @@ interface ColRow {
 // ── Seed function ─────────────────────────────────────────────────────────────
 
 async function seedBuiltIn(userId: string) {
-  const supabase = createClient()
+  
   const sheetRows = BUILT_IN_SHEETS.map((s: SheetDef, i: number) => ({
     user_id: userId,
     sheet_key: s.id,

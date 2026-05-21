@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { logAction } from '@/lib/audit-log'
 
 export interface AcSheetRow {
@@ -19,7 +19,7 @@ export interface AcSheetRow {
 }
 
 export async function getOpeningBalance(accountName: string, date: string): Promise<number> {
-  const supabase = createClient()
+  
 
   try {
     const { data } = await supabase
@@ -45,7 +45,7 @@ export async function getOpeningBalance(accountName: string, date: string): Prom
 }
 
 export async function loadAcSheet(date: string): Promise<AcSheetRow[]> {
-  const supabase = createClient()
+  
 
   const { data: accounts } = await supabase
     .from('bank_account_master')
@@ -100,7 +100,7 @@ export async function saveAcSheetCell(
   value: number,
   onIdUpdate?: (id: string) => void
 ): Promise<AcSheetRow> {
-  const supabase = createClient()
+  
   const updated = recalc({ ...row, [field]: value })
 
   if (row.id) {
@@ -152,7 +152,7 @@ export async function updateAcSheetFromTransaction(transaction: {
   account_name: string
   total_amount: number
 }): Promise<void> {
-  const supabase = createClient()
+  
   const date = transaction.date
 
   const accounts = (transaction.account_name || '')

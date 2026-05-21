@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { Search, Plus, X, Shield, ShieldCheck, Trash2, Eye, EyeOff, Pencil } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { createAdminClient } from '@/lib/supabase/admin-client'
 import { useAuth } from '@/lib/auth-context'
 import { logAction } from '@/lib/audit-log'
@@ -118,7 +118,7 @@ export default function UsersPage() {
   const removeToast = (id: number) => setToasts(t => t.filter(x => x.id !== id))
 
   const fetchUsers = useCallback(async () => {
-    const supabase = createClient()
+    
     const { data, error } = await supabase
       .from('profiles')
       .select('*')

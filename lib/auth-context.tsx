@@ -1,7 +1,7 @@
 'use client'
 
 import { createContext, useContext, useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 
 export interface AuthUser {
   id: string
@@ -19,7 +19,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null | undefined>(undefined)
 
   useEffect(() => {
-    const supabase = createClient()
+    
 
     const fetchUser = async () => {
       const { data: { user: authUser } } = await supabase.auth.getUser()

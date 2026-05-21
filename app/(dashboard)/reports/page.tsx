@@ -5,7 +5,7 @@ import {
   TrendingUp, User, Download, BarChart2, Users, MonitorSmartphone,
   Wallet, DollarSign, AlertCircle, CalendarDays, X, Search, Loader2, CheckCircle,
 } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -150,7 +150,7 @@ function CustomerModal({ title, onClose, onGenerate, loading }: {
 
   const doSearch = useCallback(async (q: string) => {
     if (!q.trim()) { setCustomers([]); return }
-    const sb = createClient()
+    const sb = supabase
     const { data } = await sb.from('customers').select('id, name').ilike('name', `%${q}%`).limit(10)
     setCustomers((data as CustomerOption[]) || [])
     setShowDropdown(true)
@@ -261,7 +261,7 @@ export default function ReportsPage() {
 
   const exportDailyPL = () => wrap('daily_pl', async () => {
     const today = todayStr()
-    const sb = createClient()
+    const sb = supabase
     const { data } = await sb.from('transactions').select('*').eq('date', today).order('sr_no', { ascending: true })
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rows = (data || []) as any[]
@@ -306,7 +306,7 @@ export default function ReportsPage() {
 
   const exportCustomerStatement = (customerId: string, customerName: string, from: string, to: string) =>
     wrap('customer_statement', async () => {
-      const sb = createClient()
+      const sb = supabase
       const [{ data: custData }, { data: cards }] = await Promise.all([
         sb.from('customers').select('*').eq('id', customerId).single(),
         sb.from('cards').select('*').eq('customer_id', customerId),
@@ -389,7 +389,7 @@ export default function ReportsPage() {
   // ── Report 3: Customer-wise Profit ────────────────────────────────────────
 
   const exportCustomerWiseProfit = (from: string, to: string) => wrap('customer_profit', async () => {
-    const sb = createClient()
+    const sb = supabase
     const { data } = await sb.from('transactions').select('*').gte('date', from).lte('date', to)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const byCustomer: Record<string, any> = {}
@@ -433,7 +433,7 @@ export default function ReportsPage() {
   // ── Report 4: Bank-wise Volume ────────────────────────────────────────────
 
   const exportBankWiseVolume = (from: string, to: string) => wrap('bank_volume', async () => {
-    const sb = createClient()
+    const sb = supabase
     const { data } = await sb.from('transactions').select('*').gte('date', from).lte('date', to)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const byAccount: Record<string, any> = {}
@@ -470,7 +470,7 @@ export default function ReportsPage() {
   // ── Report 5: Agent Performance ───────────────────────────────────────────
 
   const exportAgentPerformance = (from: string, to: string) => wrap('agent_perf', async () => {
-    const sb = createClient()
+    const sb = supabase
     const { data } = await sb.from('cc_sheet').select('*').gte('date', from).lte('date', to)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const byAgent: Record<string, any> = {}
@@ -504,7 +504,7 @@ export default function ReportsPage() {
   // ── Report 6: Pending Collections ────────────────────────────────────────
 
   const exportPendingCollections = () => wrap('daily_pl', async () => {
-    const sb = createClient()
+    const sb = supabase
     const { data } = await sb.from('transactions').select('*')
       .in('remarks', ['PEND', 'UNPAID', 'Pending', 'Unpaid', 'pending', 'unpaid'])
       .order('date', { ascending: true })
@@ -541,7 +541,7 @@ export default function ReportsPage() {
   // ── Report 7: Swipe Machine Report ───────────────────────────────────────
 
   const exportSwipeMachineReport = (from: string, to: string) => wrap('machine_report', async () => {
-    const sb = createClient()
+    const sb = supabase
     const { data } = await sb.from('cc_sheet').select('*').gte('date', from).lte('date', to)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const byMachine: Record<string, any> = {}
@@ -575,7 +575,7 @@ export default function ReportsPage() {
   // ── Report 8: Monthly Summary ─────────────────────────────────────────────
 
   const exportMonthlySummary = (year: number) => wrap('monthly_summary', async () => {
-    const sb = createClient()
+    const sb = supabase
     const { data } = await sb.from('transactions').select('*')
       .gte('date', `${year}-01-01`).lte('date', `${year}-12-31`)
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -666,7 +666,7 @@ export default function ReportsPage() {
       {activeModal === 'commission_summary' && (
         <DateRangeModal title="Commission Summary" onClose={() => setActiveModal(null)}
           onGenerate={(from, to) => wrap('commission_summary', async () => {
-            const sb = createClient()
+            const sb = supabase
             const { data } = await sb.from('transactions').select('*').gte('date', from).lte('date', to)
             const byCustomer: Record<string, any> = {} // eslint-disable-line @typescript-eslint/no-explicit-any
             ;(data || []).forEach((t: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any

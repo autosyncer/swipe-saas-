@@ -6,7 +6,7 @@ import {
   XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer,
   AreaChart, Area, Legend,
 } from 'recharts'
-import { createClient } from '@/lib/supabase/client'
+import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
 import { RefreshCw, Download, ChevronDown, AlertCircle } from 'lucide-react'
 import { PrintableReport } from '@/components/analytics/PrintableReport'
@@ -390,7 +390,7 @@ export default function AnalyticsPage() {
 
   // ── Fetch KPIs ──
   const fetchKPIs = useCallback(async () => {
-    const supabase = createClient()
+    
     setLoadingKPI(true); setErrorKPI(null)
     try {
       let q = supabase.from('transactions').select('total_amount,paid_amount,commission_amount,remarks').gte('date', start).lte('date', end)
@@ -429,7 +429,7 @@ export default function AnalyticsPage() {
 
   // ── Fetch Daily Volume ──
   const fetchDailyVolume = useCallback(async () => {
-    const supabase = createClient()
+    
     setLoadingDaily(true); setErrorDaily(null)
     try {
       let q = supabase.from('transactions').select('date,total_amount,paid_amount,commission_amount').gte('date', start).lte('date', end).order('date')
@@ -455,7 +455,7 @@ export default function AnalyticsPage() {
 
   // ── Fetch Account Breakdown ──
   const fetchAccountBreakdown = useCallback(async () => {
-    const supabase = createClient()
+    
     setLoadingAccount(true); setErrorAccount(null)
     try {
       let q = supabase.from('transactions').select('account_name,total_amount').gte('date', start).lte('date', end)
@@ -484,7 +484,7 @@ export default function AnalyticsPage() {
 
   // ── Fetch Machine Performance ──
   const fetchMachinePerf = useCallback(async () => {
-    const supabase = createClient()
+    
     setLoadingMachine(true); setErrorMachine(null)
     try {
       const { data, error } = await supabase
@@ -513,7 +513,7 @@ export default function AnalyticsPage() {
 
   // ── Fetch Top Customers ──
   const fetchTopCustomers = useCallback(async () => {
-    const supabase = createClient()
+    
     setLoadingCustomers(true); setErrorCustomers(null)
     try {
       let q = supabase.from('transactions').select('customer_name,total_amount,paid_amount,commission_amount,remarks').gte('date', start).lte('date', end)
@@ -540,7 +540,7 @@ export default function AnalyticsPage() {
 
   // ── Fetch Status Breakdown ──
   const fetchStatus = useCallback(async () => {
-    const supabase = createClient()
+    
     setLoadingStatus(true); setErrorStatus(null)
     try {
       let q = supabase.from('transactions').select('remarks,total_amount').gte('date', start).lte('date', end)
@@ -577,7 +577,7 @@ export default function AnalyticsPage() {
 
   // ── Fetch Heatmap (last 3 months always) ──
   const fetchHeatmap = useCallback(async () => {
-    const supabase = createClient()
+    
     setLoadingHeatmap(true)
     try {
       const hStart = dateStr(new Date(Date.now() - 84 * 86400000))
@@ -602,7 +602,7 @@ export default function AnalyticsPage() {
 
   // ── Fetch Growth ──
   const fetchGrowth = useCallback(async () => {
-    const supabase = createClient()
+    
     setLoadingGrowth(true)
     try {
       const now = new Date()
