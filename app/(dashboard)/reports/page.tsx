@@ -149,9 +149,9 @@ function CustomerModal({ title, onClose, onGenerate, loading }: {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const doSearch = useCallback(async (q: string) => {
-    if (!q.trim()) { setCustomers([]); return }
     const sb = supabase
-    const { data } = await sb.from('customers').select('id, name').ilike('name', `%${q}%`).limit(10)
+    const query = sb.from('customers').select('id, name').order('name').limit(20)
+    const { data } = q.trim() ? await query.ilike('name', `%${q}%`) : await query
     setCustomers((data as CustomerOption[]) || [])
     setShowDropdown(true)
   }, [])
@@ -159,7 +159,7 @@ function CustomerModal({ title, onClose, onGenerate, loading }: {
   const onSearchChange = (v: string) => {
     setSearch(v); setSelected(null)
     if (timer.current) clearTimeout(timer.current)
-    timer.current = setTimeout(() => doSearch(v), 300)
+    timer.current = setTimeout(() => doSearch(v), 200)
   }
 
   return (
@@ -175,7 +175,7 @@ function CustomerModal({ title, onClose, onGenerate, loading }: {
             <div style={{ position: 'relative' }}>
               <div style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }}><Search size={14} color="#9ca3af" /></div>
               <input value={selected ? selected.name : search} onChange={e => onSearchChange(e.target.value)}
-                onFocus={() => search && setShowDropdown(true)} placeholder="Search customer..."
+                onFocus={() => doSearch(search)} placeholder="Search customer..."
                 style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px 8px 32px', fontSize: 13, outline: 'none', boxSizing: 'border-box' }} />
               {showDropdown && customers.length > 0 && (
                 <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, background: 'white', border: '1px solid #e5e7eb', borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,0.1)', zIndex: 10, maxHeight: 180, overflowY: 'auto' }}>

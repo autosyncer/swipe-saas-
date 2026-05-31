@@ -93,9 +93,9 @@ function CustomerStatementModal({ onClose, onGenerate, loading }: {
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const searchCustomers = useCallback(async (q: string) => {
-    if (!q.trim()) { setCustomers([]); return }
     const sb = supabase
-    const { data } = await sb.from('customers').select('id, name').ilike('name', `%${q}%`).limit(10)
+    const query = sb.from('customers').select('id, name').order('name').limit(20)
+    const { data } = q.trim() ? await query.ilike('name', `%${q}%`) : await query
     setCustomers((data as CustomerOption[]) || [])
     setShowDropdown(true)
   }, [])
@@ -104,7 +104,7 @@ function CustomerStatementModal({ onClose, onGenerate, loading }: {
     setSearch(v)
     setSelected(null)
     if (searchTimeout.current) clearTimeout(searchTimeout.current)
-    searchTimeout.current = setTimeout(() => searchCustomers(v), 300)
+    searchTimeout.current = setTimeout(() => searchCustomers(v), 200)
   }
 
   return (
@@ -125,7 +125,7 @@ function CustomerStatementModal({ onClose, onGenerate, loading }: {
               <input
                 value={selected ? selected.name : search}
                 onChange={e => handleSearchChange(e.target.value)}
-                onFocus={() => search && setShowDropdown(true)}
+                onFocus={() => searchCustomers(search)}
                 placeholder="Search customer..."
                 style={{ width: '100%', border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px 8px 32px', fontSize: 13, outline: 'none', boxSizing: 'border-box' }}
               />

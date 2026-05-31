@@ -7,18 +7,38 @@ import { supabase } from '@/lib/supabase'
 import { Transaction, Customer, Card } from '@/types/database'
 import { logAction } from '@/lib/audit-log'
 import { runRiskDetection } from '@/lib/risk-engine'
-import { updateAcSheetFromTransaction } from '@/lib/ac-sheet'
+import { deductTransactionFromAcSheet, getAccountCurrentBalance, AccountBalanceInfo } from '@/lib/ac-sheet'
 import { createCCSheetRow, createChamundaSheetRow, createCustomerSheetRow as createCustomerSheetRowHelper } from '@/lib/sheet-helpers'
 import { saveTransactionToStorage } from '@/lib/transaction-backup'
 
-const ACCOUNT_OPTIONS = [
-  'KTC INDUS', 'MAP IND', 'RT IND', 'BGM IND', 'SKT INDUS', 'MAP INDUS',
-  'RT INDUS', 'BGM INDUS', 'NTC INDUS', 'SKT FDRL', 'NGM INDUS',
-  'MAP IND+RT IND', 'MGs FDRL', 'SST FDRL', 'NTC FDRL', 'KTC FDRL',
-  'MAP FDRL', 'TAPI FDRL', 'BGM FDRL', 'TAPI BOB', 'KTC BOB',
-  'MNS BOB', 'NGM BOB', 'SKT FINK', 'NTC BOB', 'RT BOB',
-  'MAP BOB', 'SKT BOB', 'NSS FDRL', 'BGM BOB',
-]
+// Loaded dynamically from bank_account_master
+const ACCOUNT_OPTIONS: string[] = []
+
+interface AccountEntry {
+  id: string
+  accountName: string
+  machineName: string
+  commPct: string
+  commType: string
+  commPayMode: string
+  totalAmount: string
+  paidAmount: string
+  paidInCash: string
+  swapAmount: string
+  difference: string
+  remarks: string
+  acctDropOpen: boolean
+}
+
+function makeEntry(defaultCommPct = DEFAULT_COMM.toString()): AccountEntry {
+  return {
+    id: Math.random().toString(36).slice(2),
+    accountName: '', machineName: '',
+    commPct: defaultCommPct, commType: 'Inclusive', commPayMode: 'Cash',
+    totalAmount: '', paidAmount: '', paidInCash: '', swapAmount: '',
+    difference: '', remarks: 'PAID', acctDropOpen: false,
+  }
+}
 
 const SWAP_SUGGESTIONS = [
   'RT', 'BGM YES', 'NTC YES', 'SKT IND', 'KTC YES', 'MAP IND',
@@ -42,7 +62,8 @@ function fmtDate(d: string) {
 }
 
 function cardLabel(c: Card) {
-  const nick = c.card_nickname ? `${c.card_nickname} — ` : ''
+  const nick = c.card_nickname && c.card_nickname.toLowerCase() !== c.bank_name.toLowerCase()
+    ? `${c.card_nickname} — ` : ''
   return `${nick}${c.bank_name} ...${c.last4}`
 }
 
@@ -63,23 +84,25 @@ function EntryPageInner() {
   const prefillCustomerId = searchParams.get('customer_id')
   const prefillCustomerName = searchParams.get('customer_name')
 
-  const today = new Date().toISOString().split('T')[0]
+  const getToday = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
+  const [today, setToday] = useState(getToday)
+
+  // Update today at midnight
+  useEffect(() => {
+    const msUntilMidnight = () => { const n=new Date(),m=new Date(n); m.setHours(24,0,0,0); return m.getTime()-n.getTime() }
+    let interval: ReturnType<typeof setInterval>
+    const timeout = setTimeout(() => {
+      setToday(getToday())
+      interval = setInterval(() => setToday(getToday()), 24*60*60*1000)
+    }, msUntilMidnight())
+    return () => { clearTimeout(timeout); clearInterval(interval) }
+  }, [])
 
   const [nextSrNo, setNextSrNo] = useState<number>(6752)
-  const [commPct, setCommPct] = useState<string>(DEFAULT_COMM.toString())
-  const [commType, setCommType] = useState<string>('Inclusive')
-  const [commAutoSource, setCommAutoSource] = useState<string | null>(null) // account name that auto-filled commission
-  const [form, setForm] = useState({
-    customerName: '',
-    bankCard: '',
-    totalAmount: '',
-    paidAmount: '',
-    accountNames: [] as string[],
-    swapAmount: '',
-    swapNames: [] as string[],
-    difference: '',
-    remarks: 'PAID',
-  })
+  const [form, setForm] = useState({ customerName: '', bankCard: '' })
+  const initialEntry = makeEntry()
+  const [accountEntries, setAccountEntries] = useState<AccountEntry[]>([initialEntry])
+  const [activeEntryId, setActiveEntryId] = useState<string>(initialEntry.id)
 
   // Customer autocomplete
   const [custSearch, setCustSearch] = useState('')
@@ -91,19 +114,12 @@ function EntryPageInner() {
   // Customer cards
   const [customerCards, setCustomerCards] = useState<Card[]>([])
   const [selectedCardId, setSelectedCardId] = useState<string>('')
-  const [customBankCard, setCustomBankCard] = useState(false) // true when "Other" selected
+  const [selectedCardLast4, setSelectedCardLast4] = useState<string>('')
+  const [customBankCard, setCustomBankCard] = useState(false)
 
-  // Account name multi-select
-  const [acctDropOpen, setAcctDropOpen] = useState(false)
-  const [acctCustomInput, setAcctCustomInput] = useState('')
-  const acctRef = useRef<HTMLDivElement>(null)
-
-  // Swap name tag input
-  const [swapInput, setSwapInput] = useState('')
-  const [swapFocused, setSwapFocused] = useState(false)
-  const [showSwapSugg, setShowSwapSugg] = useState(false)
-  const swapRef = useRef<HTMLDivElement>(null)
   const [machineNames, setMachineNames] = useState<string[]>(SWAP_SUGGESTIONS)
+  const [accountOptions, setAccountOptions] = useState<string[]>([])
+  const [accountMachineMap, setAccountMachineMap] = useState<Record<string, string>>({})
 
   // Right panel
   const [todayEntries, setTodayEntries] = useState<Transaction[]>([])
@@ -128,10 +144,50 @@ function EntryPageInner() {
   const [submitting, setSubmitting] = useState(false)
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
 
+  // Account balances keyed by entry id
+  const [accountBalances, setAccountBalances] = useState<Record<string, AccountBalanceInfo | null>>({})
+
+  // L-15 modal
+  const [showL15, setShowL15] = useState(false)
+  const [l15Entries, setL15Entries] = useState<{ id: string; date: string; customer_name: string; amount: number; notes: string | null }[]>([])
+  const [l15Name, setL15Name] = useState('')
+  const [l15Amount, setL15Amount] = useState('')
+  const [l15Notes, setL15Notes] = useState('')
+  const [l15Saving, setL15Saving] = useState(false)
+
+  // Expenses modal
+  const [showExpense, setShowExpense] = useState(false)
+  const [expenseMaster, setExpenseMaster] = useState<{ id: string; expense_name: string; category: string; sort_order: number }[]>([])
+  const [expenseEdits, setExpenseEdits] = useState<Record<string, { amount: string; note: string }>>({})
+  const [expenseSaving, setExpenseSaving] = useState(false)
+  const [newExpName, setNewExpName] = useState('')
+  const [newExpAmt, setNewExpAmt] = useState('')
+  const [newExpCat, setNewExpCat] = useState('other')
+  const [chamundaExpenseRows, setChamundaExpenseRows] = useState<{ id: string; expense_id: string | null; expense_name: string | null; expense_amount: number | null; expense_note: string | null }[]>([])
+
   // ── Load active machine names for swap suggestions ──
   useEffect(() => {
     supabase.from('swipe_machines').select('machine_name').eq('status', 'Active').then(({ data }) => {
       if (data && data.length > 0) setMachineNames(data.map((m: { machine_name: string }) => m.machine_name))
+    })
+  }, [])
+
+  // ── Load bank accounts + linked machines dynamically ──
+  useEffect(() => {
+    Promise.all([
+      supabase.from('bank_account_master').select('account_name').eq('is_active', true).order('account_name'),
+      supabase.from('swipe_machines').select('account_name, machine_name').eq('status', 'Active'),
+    ]).then(([{ data: accounts }, { data: machines }]) => {
+      if (accounts && accounts.length > 0) {
+        setAccountOptions(accounts.map((a: { account_name: string }) => a.account_name))
+      }
+      if (machines && machines.length > 0) {
+        const map: Record<string, string> = {}
+        machines.forEach((m: { account_name: string; machine_name: string }) => {
+          map[m.account_name] = m.machine_name
+        })
+        setAccountMachineMap(map)
+      }
     })
   }, [])
 
@@ -209,42 +265,70 @@ function EntryPageInner() {
     return () => clearTimeout(t)
   }, [custSearch])
 
-  // ── Close dropdowns on outside click ──
+  // ── Close customer dropdown on outside click ──
   useEffect(() => {
     function handler(e: MouseEvent) {
-      if (acctRef.current && !acctRef.current.contains(e.target as Node)) setAcctDropOpen(false)
       if (custRef.current && !custRef.current.contains(e.target as Node)) setShowCustDrop(false)
-      if (swapRef.current && !swapRef.current.contains(e.target as Node)) setShowSwapSugg(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // ── Recalculate paid/swap when totalAmount, commPct, or commType changes ──
-  useEffect(() => {
-    const total = parseFloat(form.totalAmount)
-    const comm = parseFloat(commPct) || DEFAULT_COMM
-    if (!total || isNaN(total)) return
-    const commAmt = Math.round(total * comm / 100)
-    // Inclusive: swapAmount = total + commission (customer pays more)
-    // Exclusive: swapAmount = total (commission collected separately in cash)
-    // Deferred:  swapAmount = total (commission not collected now)
-    const swap = commType === 'Inclusive' ? total + commAmt : total
-    setForm(f => ({
-      ...f,
-      paidAmount: total.toString(),
-      swapAmount: Math.round(swap).toString(),
+  // ── Helper: update a single account entry field ──
+  function updateEntry(id: string, patch: Partial<AccountEntry>) {
+    setAccountEntries(prev => prev.map(e => {
+      if (e.id !== id) return e
+      const updated = { ...e, ...patch }
+      // Auto-recalculate paid/swap when total or commission changes
+      const total = parseFloat(updated.totalAmount)
+      if (!isNaN(total) && total > 0 && ('totalAmount' in patch || 'commPct' in patch || 'commType' in patch)) {
+        const comm = parseFloat(updated.commPct) || DEFAULT_COMM
+        const commAmt = Math.round(total * comm / 100)
+        const swap = updated.commType === 'Inclusive' ? total + commAmt : total
+        updated.paidAmount = total.toString()
+        updated.swapAmount = Math.round(swap).toString()
+      }
+      return updated
     }))
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.totalAmount, commPct, commType])
+  }
+
+  function addEntry() {
+    const defaultComm = selectedCustomer ? String(selectedCustomer.default_charge_pct || DEFAULT_COMM) : String(DEFAULT_COMM)
+    const newEntry = makeEntry(defaultComm)
+    setAccountEntries(prev => [...prev, newEntry])
+    setActiveEntryId(newEntry.id)
+  }
+
+  function removeEntry(id: string) {
+    setAccountEntries(prev => {
+      if (prev.length <= 1) return prev
+      const next = prev.filter(e => e.id !== id)
+      if (id === activeEntryId) setActiveEntryId(next[next.length - 1].id)
+      return next
+    })
+  }
+
+  function selectAccountForEntry(id: string, accountName: string) {
+    const machineName = accountMachineMap[accountName] || ''
+    supabase.from('bank_account_master').select('commission_pct').eq('account_name', accountName).maybeSingle()
+      .then(({ data }) => {
+        const commPct = data?.commission_pct ? String(data.commission_pct) : String(DEFAULT_COMM)
+        updateEntry(id, { accountName, machineName, commPct, acctDropOpen: false })
+      })
+    getAccountCurrentBalance(accountName, today).then(bal => {
+      setAccountBalances(prev => ({ ...prev, [id]: bal }))
+    }).catch(() => {})
+  }
 
   // ── Select a customer from autocomplete ──
   async function selectCustomer(c: Customer) {
     setSelectedCustomer(c)
     setCustSearch(c.name)
     setShowCustDrop(false)
-    setCommPct((c.default_charge_pct || DEFAULT_COMM).toString())
+    const defaultComm = String(c.default_charge_pct || DEFAULT_COMM)
     setForm(f => ({ ...f, customerName: c.name, bankCard: '' }))
+    // Apply customer commission to all existing entries
+    setAccountEntries(prev => prev.map(e => ({ ...e, commPct: defaultComm })))
     setSelectedCardId('')
     setCustomBankCard(false)
 
@@ -278,59 +362,22 @@ function EntryPageInner() {
 
   function selectCard(c: Card) {
     setSelectedCardId(c.id)
+    setSelectedCardLast4(c.last4 || '')
     setForm(f => ({ ...f, bankCard: c.bank_name }))
     setCustomBankCard(false)
   }
 
-  async function toggleAccount(opt: string) {
-    const next = form.accountNames.includes(opt)
-      ? form.accountNames.filter(a => a !== opt)
-      : [...form.accountNames, opt]
-    setForm(f => ({ ...f, accountNames: next }))
-
-    // Auto-set commission from first selected account
-    if (next.length > 0) {
-      const firstAcct = next[0].split(' ')[0]
-      const { data } = await supabase.from('bank_account_master').select('commission_pct, commission_type, account_name').ilike('account_name', `%${firstAcct}%`).limit(1)
-      if (data && data.length > 0 && Number(data[0].commission_pct) > 0) {
-        setCommPct(String(data[0].commission_pct))
-        if (data[0].commission_type) setCommType(data[0].commission_type as string)
-        setCommAutoSource(data[0].account_name as string)
-      }
-    } else {
-      setCommAutoSource(null)
-    }
-  }
-
-  function addCustomAccount() {
-    const val = acctCustomInput.trim()
-    if (val && !form.accountNames.includes(val)) {
-      setForm(f => ({ ...f, accountNames: [...f.accountNames, val] }))
-    }
-    setAcctCustomInput('')
-  }
-
-  function addSwapName(val?: string) {
-    const v = (val ?? swapInput).trim()
-    if (v && !form.swapNames.includes(v)) {
-      setForm(f => ({ ...f, swapNames: [...f.swapNames, v] }))
-    }
-    setSwapInput('')
-    setShowSwapSugg(false)
-  }
-
   function resetForm() {
-    setForm({ customerName: '', bankCard: '', totalAmount: '', paidAmount: '', accountNames: [], swapAmount: '', swapNames: [], difference: '', remarks: 'PAID' })
-    setCommAutoSource(null)
-    setCommType('Inclusive')
+    setForm({ customerName: '', bankCard: '' })
+    setSelectedCardLast4('')
+    const fresh = makeEntry()
+    setAccountEntries([fresh])
+    setActiveEntryId(fresh.id)
     setCustSearch('')
     setSelectedCustomer(null)
     setCustomerCards([])
     setSelectedCardId('')
     setCustomBankCard(false)
-    setCommPct(DEFAULT_COMM.toString())
-    setSwapInput('')
-    setAcctCustomInput('')
     setShowReminder(false)
     setReminderDate('')
     setReminderTime('09:00')
@@ -342,29 +389,92 @@ function EntryPageInner() {
     setGeneratingInvoice(false)
   }
 
+  // ── L-15 helpers ──
+  async function fetchL15() {
+    const { data } = await supabase.from('l15_entries').select('*').eq('date', today).order('created_at')
+    setL15Entries((data as typeof l15Entries) || [])
+  }
+  async function addL15Entry() {
+    if (!l15Name || !l15Amount) { setToast({ msg: 'Name and amount required', type: 'error' }); setTimeout(() => setToast(null), 3000); return }
+    setL15Saving(true)
+    const amt = parseFloat(l15Amount) || 0
+    await supabase.from('l15_entries').insert({ date: today, customer_name: l15Name, amount: amt, notes: l15Notes || null })
+    const { data: entries } = await supabase.from('l15_entries').select('amount').eq('date', today)
+    const total = (entries || []).reduce((s: number, r: { amount: number }) => s + Number(r.amount), 0)
+    await supabase.from('chamunda_sheet').update({ opening_amount: total }).eq('date', today).eq('row_type', 'opening_l15')
+    await supabase.rpc('recalculate_chamunda_totals', { p_date: today })
+    setL15Name(''); setL15Amount(''); setL15Notes('')
+    setL15Saving(false)
+    await fetchL15()
+    setToast({ msg: 'L-15 entry added', type: 'success' }); setTimeout(() => setToast(null), 3000)
+  }
+  async function deleteL15Entry(id: string) {
+    await supabase.from('l15_entries').delete().eq('id', id)
+    const { data: entries } = await supabase.from('l15_entries').select('amount').eq('date', today)
+    const total = (entries || []).reduce((s: number, r: { amount: number }) => s + Number(r.amount), 0)
+    await supabase.from('chamunda_sheet').update({ opening_amount: total }).eq('date', today).eq('row_type', 'opening_l15')
+    await supabase.rpc('recalculate_chamunda_totals', { p_date: today })
+    await fetchL15()
+  }
+
+  // ── Expense helpers ──
+  async function openExpensePopup() {
+    const { data: em } = await supabase.from('expense_master').select('*').eq('is_active', true).order('sort_order')
+    setExpenseMaster((em as typeof expenseMaster) || [])
+    const { data: rows } = await supabase.from('chamunda_sheet').select('id,expense_id,expense_name,expense_amount,expense_note').eq('date', today).eq('row_type', 'expense')
+    const expRows = (rows as typeof chamundaExpenseRows) || []
+    setChamundaExpenseRows(expRows)
+    const edits: Record<string, { amount: string; note: string }> = {}
+    expRows.forEach(r => { edits[r.id] = { amount: r.expense_amount ? String(r.expense_amount) : '', note: r.expense_note || '' } })
+    setExpenseEdits(edits)
+    setShowExpense(true)
+  }
+  async function saveExpenses() {
+    setExpenseSaving(true)
+    for (const row of chamundaExpenseRows) {
+      const edit = expenseEdits[row.id]
+      if (!edit) continue
+      const amt = parseFloat(edit.amount) || 0
+      await supabase.from('chamunda_sheet').update({ expense_amount: amt, expense_note: edit.note || null }).eq('id', row.id)
+    }
+    await supabase.rpc('recalculate_chamunda_totals', { p_date: today })
+    setExpenseSaving(false)
+    setShowExpense(false)
+    setToast({ msg: 'Expenses saved!', type: 'success' }); setTimeout(() => setToast(null), 3000)
+  }
+  async function addCustomExpense() {
+    if (!newExpName) { setToast({ msg: 'Expense name required', type: 'error' }); setTimeout(() => setToast(null), 3000); return }
+    const { data: em } = await supabase.from('expense_master').insert({ expense_name: newExpName, category: newExpCat, sort_order: 900 }).select().single()
+    if (em) {
+      const amt = parseFloat(newExpAmt) || 0
+      const { data: newRow } = await supabase.from('chamunda_sheet').insert({
+        date: today, row_type: 'expense', sort_order: 1400,
+        expense_id: (em as { id: string }).id, expense_name: newExpName, expense_amount: amt,
+      }).select('id,expense_id,expense_name,expense_amount,expense_note').single()
+      if (newRow) {
+        setChamundaExpenseRows(prev => [...prev, newRow as typeof chamundaExpenseRows[0]])
+        setExpenseEdits(ed => ({ ...ed, [(newRow as { id: string }).id]: { amount: newExpAmt, note: '' } }))
+        setExpenseMaster(prev => [...prev, em as typeof expenseMaster[0]])
+      }
+      await supabase.rpc('recalculate_chamunda_totals', { p_date: today })
+    }
+    setNewExpName(''); setNewExpAmt(''); setNewExpCat('other')
+    setToast({ msg: 'Custom expense added', type: 'success' }); setTimeout(() => setToast(null), 3000)
+  }
+
   async function generateInvoice(
     transaction: Record<string, unknown>,
     items: { commodity_id: string; name: string; unit: string; qty: number; price: number; subtotal: number }[]
   ) {
     const validItems = items.filter(i => i.name && i.qty > 0)
-    if (validItems.length === 0) {
-      console.log('[invoice] no valid items, skipping')
-      return null
-    }
 
     console.log('[invoice] generateInvoice called', { transaction, items: validItems })
     setGeneratingInvoice(true)
 
     try {
-      // Step 1: Generate invoice number
-      console.log('[invoice] calling generate_invoice_number RPC')
-      const { data: invoiceNum, error: numError } = await supabase.rpc('generate_invoice_number')
-      console.log('[invoice] invoice number:', invoiceNum, 'error:', numError)
-      if (numError) {
-        console.error('[invoice] RPC error:', numError)
-        setToast({ msg: `Invoice number error: ${numError.message}`, type: 'error' })
-        return null
-      }
+      // Step 1: Build invoice number from SR no
+      const srNo = transaction.sr_no ? String(transaction.sr_no).padStart(4, '0') : '0000'
+      const invoiceNum = `INV-SR-${srNo}`
 
       // Step 2: Check invoices table accessible
       const { data: tableCheck, error: tableErr } = await supabase.from('invoices').select('id').limit(1)
@@ -375,13 +485,55 @@ function EntryPageInner() {
         return null
       }
 
-      // Step 3: Build insert payload matching actual schema
+      // Step 3: Fetch customer details for invoice
+      let customerAddress = ''
+      let consigneeName = ''
+      let consigneeAddress = ''
+      let buyerName = ''
+      let buyerAddress = ''
+      const custId = transaction.customer_id as string | null
+      // First fetch base fields (always exist)
+      const baseQuery = custId
+        ? supabase.from('customers').select('id, address, name').eq('id', custId).maybeSingle()
+        : supabase.from('customers').select('id, address, name').ilike('name', transaction.customer_name as string).maybeSingle()
+      const { data: custBase } = await baseQuery
+      if (custBase) {
+        customerAddress = custBase.address || ''
+        consigneeName   = (transaction.customer_name as string)
+        consigneeAddress = custBase.address || ''
+        buyerName        = (transaction.customer_name as string)
+        buyerAddress     = custBase.address || ''
+        // Try to fetch invoice-specific fields (may not exist if migration not run)
+        const { data: custExtra } = await supabase
+          .from('customers')
+          .select('consignee_name, consignee_address, buyer_name, buyer_address')
+          .eq('id', custBase.id)
+          .maybeSingle()
+        if (custExtra) {
+          if (custExtra.consignee_name)    consigneeName    = custExtra.consignee_name
+          if (custExtra.consignee_address) consigneeAddress = custExtra.consignee_address
+          if (custExtra.buyer_name)        buyerName        = custExtra.buyer_name
+          if (custExtra.buyer_address)     buyerAddress     = custExtra.buyer_address
+        }
+      } else {
+        consigneeName = buyerName = transaction.customer_name as string
+      }
+
+      // Step 4: Build insert payload
       const subtotal = validItems.reduce((s, i) => s + i.subtotal, 0)
+      const swapTotal = Number(transaction.swap_amount) || 0
+      const invoiceTotal = swapTotal > 0 ? swapTotal : subtotal
+      const discount = subtotal - invoiceTotal
       const insertPayload = {
         invoice_number: invoiceNum as string,
         transaction_id: (transaction.id as string) || null,
-        customer_id: (transaction.customer_id as string) || null,
+        customer_id: custId || null,
         customer_name: (transaction.customer_name as string) || '',
+        customer_address: customerAddress,
+        consignee_name: consigneeName,
+        consignee_address: consigneeAddress,
+        buyer_name: buyerName,
+        buyer_address: buyerAddress,
         items: validItems.map(i => ({
           commodity_id: i.commodity_id,
           name: i.name,
@@ -393,8 +545,17 @@ function EntryPageInner() {
         subtotal,
         tax_percent: 0,
         tax_amount: 0,
-        total_amount: subtotal,
-        notes: `Auto-generated from SR #${transaction.sr_no}`,
+        total_amount: invoiceTotal,
+        transaction_date: (transaction.date as string) || null,
+        paid_by: (() => {
+          const name = (transaction.bank_card as string) || ''
+          const last4 = (transaction.card_last4 as string) || ''
+          if (name && last4) return `${name} -XXXX-${last4}`
+          return name
+        })(),
+        notes: discount > 0
+          ? `SR #${transaction.sr_no} | Discount: ₹${discount.toLocaleString('en-IN')}`
+          : `SR #${transaction.sr_no}`,
         status: 'draft',
       }
       console.log('[invoice] inserting:', insertPayload)
@@ -431,124 +592,142 @@ function EntryPageInner() {
   }
 
   async function handleSubmit() {
-    if (!form.customerName || !form.totalAmount) {
-      setToast({ msg: 'Customer name and total amount are required', type: 'error' })
+    if (!form.customerName) {
+      setToast({ msg: 'Customer name is required', type: 'error' })
       setTimeout(() => setToast(null), 3000)
       return
     }
-    setSubmitting(true)
-    const total = parseFloat(form.totalAmount) || 0
-    const comm = parseFloat(commPct) || DEFAULT_COMM
-    const commAmt = commType === 'Deferred' ? 0 : Math.round(total * comm / 100)
-    const payload = {
-      date: today,
-      customer_name: form.customerName.trim(),
-      bank_card: form.bankCard.trim() || '',
-      total_amount: total,
-      paid_amount: parseFloat(form.paidAmount) || 0,
-      account_name: form.accountNames.join('+'),
-      swap_amount: parseFloat(form.swapAmount) || 0,
-      swap_name: form.swapNames.join('+'),
-      difference: form.difference ? parseFloat(form.difference) : null,
-      remarks: form.remarks,
-      status: ({PAID:'Paid',PEND:'Pending',PURU:'Puru',UNPAID:'Unpaid',SE:'Paid',CANCEL:'Cancelled'} as Record<string,string>)[form.remarks] || 'Pending',
-      commission_pct: comm,
-      commission_amount: commAmt,
-      commission_type: commType,
-      commodity_items: commodityItems.filter(i => i.name && i.qty > 0).length > 0
-        ? commodityItems.filter(i => i.name && i.qty > 0)
-        : [],
+    const validEntries = accountEntries.filter(e => e.totalAmount && parseFloat(e.totalAmount) > 0)
+    if (validEntries.length === 0) {
+      setToast({ msg: 'At least one account entry with a total amount is required', type: 'error' })
+      setTimeout(() => setToast(null), 3000)
+      return
     }
-    console.log('[entry] submit payload:', payload)
-    const { data, error } = await supabase.from('transactions').insert(payload).select().single()
-    console.log('[entry] result:', data, error)
 
-    if (error) {
-      setToast({ msg: `Error: ${error.message}`, type: 'error' })
-    } else {
-      const newTransaction = data
-      // Capture before resetForm clears state
-      const snapCustomerName = form.customerName
-      const snapBankCard = form.bankCard
-      const snapTotalAmount = form.totalAmount
-      const snapCustomer = selectedCustomer
-      const snapShowReminder = showReminder
-      const snapReminderDate = reminderDate
-      const snapReminderTime = reminderTime
-      const snapReminderType = reminderType
-      const snapReminderNotes = reminderNotes
-      const snapShowCommodities = showCommodities
-      const snapCommodityItems = [...commodityItems]
+    // Block only if any account has zero or negative balance
+    const noBalEntries = validEntries.filter(e => {
+      const bal = accountBalances[e.id]
+      return bal != null && bal.remaining <= 0
+    })
+    if (noBalEntries.length > 0) {
+      const names = noBalEntries.map(e => `${e.accountName} (₹${accountBalances[e.id]!.remaining.toLocaleString('en-IN')})`).join(', ')
+      setToast({ msg: `⚠️ No balance — cannot proceed: ${names}`, type: 'error' })
+      setTimeout(() => setToast(null), 4000)
+      return
+    }
 
-      setNextSrNo(n => n + 1)
-      resetForm()
-      logAction({
-        action: 'Transaction Created',
-        module: 'Daily Register',
-        details: {
-          sr_no: data?.sr_no,
-          customer_name: data?.customer_name,
-          bank_card: data?.bank_card,
-          total_amount: data?.total_amount,
-          paid_amount: data?.paid_amount,
-          account_name: data?.account_name,
-          swap_amount: data?.swap_amount,
-          swap_name: data?.swap_name,
-          remarks: data?.remarks,
-          commission_pct: data?.commission_pct,
-          date: data?.date,
-        },
-      })
-      fetchTodayEntries()
-      if (newTransaction) {
-        createCCSheetRow(newTransaction as Record<string, unknown>)
-        createChamundaSheetRow(newTransaction as Record<string, unknown>)
-        createCustomerSheetRowHelper(newTransaction as Record<string, unknown>, snapCustomer?.id || null)
-        updateAcSheetFromTransaction({
-          date: newTransaction.date,
-          account_name: newTransaction.account_name,
-          total_amount: newTransaction.total_amount,
-        }).catch(err => console.error('[AC Sheet] update error:', err))
-        runRiskDetection().catch(() => {})
-        saveTransactionToStorage(newTransaction).catch(() => {})
+    setSubmitting(true)
+    const snapCustomer = selectedCustomer
+    const snapShowReminder = showReminder
+    const snapReminderDate = reminderDate
+    const snapReminderTime = reminderTime
+    const snapReminderType = reminderType
+    const snapReminderNotes = reminderNotes
+    const snapShowCommodities = showCommodities
+    const snapCommodityItems = [...commodityItems]
+    const snapCardLast4 = selectedCardLast4
+
+    const savedSrNos: number[] = []
+    let lastTransaction: Record<string, unknown> | null = null
+    let hasError = false
+
+    for (const entry of validEntries) {
+      const total = parseFloat(entry.totalAmount) || 0
+      const comm = parseFloat(entry.commPct) || DEFAULT_COMM
+      const commAmt = entry.commType === 'Deferred' ? 0 : Math.round(total * comm / 100)
+      const payload = {
+        date: today,
+        customer_name: form.customerName.trim(),
+        bank_card: form.bankCard.trim() || '',
+        total_amount: total,
+        paid_amount: parseFloat(entry.paidAmount) || 0,
+        ...(entry.paidInCash ? { paid_in_cash: parseFloat(entry.paidInCash) } : {}),
+        account_name: entry.accountName,
+        swap_amount: parseFloat(entry.swapAmount) || 0,
+        swap_name: entry.machineName,
+        difference: entry.difference ? parseFloat(entry.difference) : null,
+        remarks: entry.remarks,
+        status: ({PAID:'Paid',PEND:'Pending',PURU:'Puru',UNPAID:'Unpaid',SE:'Paid',CANCEL:'Cancelled'} as Record<string,string>)[entry.remarks] || 'Pending',
+        commission_pct: comm,
+        commission_amount: commAmt,
+        commission_type: entry.commType,
+        commodity_items: [],
       }
+      const { data, error } = await supabase.from('transactions').insert(payload).select().single()
+      if (error) {
+        setToast({ msg: `Error saving ${entry.accountName || 'entry'}: ${error.message}`, type: 'error' })
+        hasError = true
+        break
+      }
+      savedSrNos.push(data.sr_no)
+      lastTransaction = data as Record<string, unknown>
+      createCCSheetRow(data as Record<string, unknown>)
+      createChamundaSheetRow(data as Record<string, unknown>)
+      createCustomerSheetRowHelper(data as Record<string, unknown>, snapCustomer?.id || null, snapReminderDate || null)
+      ;(async () => {
+        try {
+          const swapAmt = Number(data.swap_amount)
+          const acctName = data.account_name as string
+          console.log('[AC deduct] account:', acctName, 'swap_amount:', swapAmt, 'date:', data.date)
+          if (!swapAmt || !acctName) {
+            console.warn('[AC deduct] skipped – missing swap_amount or account_name')
+            return
+          }
+          const results = await deductTransactionFromAcSheet({ date: data.date as string, account_name: acctName, swap_amount: swapAmt })
+          console.log('[AC deduct] results:', results)
+          const lowAccounts = results.filter(r => r.low_balance)
+          if (lowAccounts.length > 0) {
+            const names = lowAccounts.map(r => `${r.account_name} (₹${r.closing_bal.toLocaleString('en-IN')})`).join(', ')
+            setTimeout(() => setToast({ msg: `⚠️ Low Balance: ${names}`, type: 'error' }), 3500)
+          }
+        } catch (e) { console.error('[AC Sheet update failed]', e) }
+      })()
+      logAction({ action: 'Transaction Created', module: 'Daily Register', details: { sr_no: data.sr_no, customer_name: data.customer_name, account_name: data.account_name, total_amount: data.total_amount } })
+    }
 
-      // Reminder
+    if (!hasError) {
+      setNextSrNo(n => n + validEntries.length)
+      runRiskDetection().catch(() => {})
+      if (lastTransaction) saveTransactionToStorage(lastTransaction).catch(() => {})
+      fetchTodayEntries()
+
+      // Reminder (once, from first entry)
       let reminderSaved = false
       if (snapShowReminder && snapReminderDate) {
-        const titleMap: Record<string, string> = {
-          payment: `Collect payment — ${snapCustomerName}`,
-          card_due: `Card due — ${snapCustomerName}`,
-          follow_up: `Follow up — ${snapCustomerName}`,
-          custom: `Reminder — ${snapCustomerName}`,
-        }
+        const titleMap: Record<string, string> = { payment: `Collect payment — ${form.customerName}`, card_due: `Card due — ${form.customerName}`, follow_up: `Follow up — ${form.customerName}`, custom: `Reminder — ${form.customerName}` }
         const { error: remErr } = await supabase.from('reminders').insert({
-          title: titleMap[snapReminderType] || `Reminder — ${snapCustomerName}`,
-          description: snapReminderNotes || `Entry SR #${newTransaction?.sr_no} — ₹${snapTotalAmount}`,
+          title: titleMap[snapReminderType] || `Reminder — ${form.customerName}`,
+          description: snapReminderNotes || `${validEntries.length} entries — SR #${savedSrNos.join(', #')}`,
           reminder_date: snapReminderDate,
           reminder_time: snapReminderTime || '09:00:00',
           type: snapReminderType,
           customer_id: snapCustomer?.id || null,
-          customer_name: snapCustomerName || '',
-          bank_name: snapBankCard || '',
-          amount: parseFloat(snapTotalAmount) || 0,
+          customer_name: form.customerName || '',
+          bank_name: form.bankCard || '',
+          amount: validEntries.reduce((s, e) => s + (parseFloat(e.totalAmount) || 0), 0),
           status: 'pending',
           phone: snapCustomer?.phone || '',
         })
         if (!remErr) reminderSaved = true
-        else console.error('Reminder save error:', remErr)
       }
 
-      // Invoice generation
+      // Invoice — always generate for every transaction submission
       let invoiceResult = null
-      if (snapShowCommodities && snapCommodityItems.some(i => i.name && i.qty > 0)) {
-        const txWithCustomer = { ...newTransaction, customer_id: snapCustomer?.id || null }
-        invoiceResult = await generateInvoice(txWithCustomer as Record<string, unknown>, snapCommodityItems)
+      if (lastTransaction) {
+        const totalSwapAcrossEntries = validEntries.reduce((s, e) => s + (parseFloat(e.swapAmount) || 0), 0)
+        const txWithCustomer = {
+          ...lastTransaction,
+          customer_id: snapCustomer?.id || null,
+          swap_amount: totalSwapAcrossEntries,
+          card_last4: snapCardLast4,
+        }
+        const commodityItemsToUse = snapShowCommodities ? snapCommodityItems : []
+        invoiceResult = await generateInvoice(txWithCustomer, commodityItemsToUse)
         if (invoiceResult) setGeneratedInvoice(invoiceResult)
       }
 
-      // Final toast
-      const parts = [`Entry saved — SR #${newTransaction?.sr_no}`]
+      resetForm()
+      const parts = [`${savedSrNos.length} entr${savedSrNos.length > 1 ? 'ies' : 'y'} saved — SR #${savedSrNos.join(', #')}`]
       if (reminderSaved) parts.push('Reminder set!')
       if (invoiceResult) parts.push(`Invoice ${invoiceResult.invoice_number} generated!`)
       setToast({ msg: parts.join(' + '), type: 'success' })
@@ -583,10 +762,7 @@ function EntryPageInner() {
     a.click()
   }
 
-  const filteredSwapSugg = machineNames.filter(
-    s => !form.swapNames.includes(s) &&
-      (swapInput.length === 0 || s.toLowerCase().includes(swapInput.toLowerCase()))
-  )
+  // filteredSwapSugg unused — machine is auto-filled per entry from accountMachineMap
 
   const inputCls = 'w-full rounded-md border px-3 py-2 text-sm outline-none focus:border-[#3ECF8E] transition-colors'
   const labelCls = 'block text-xs font-medium text-[#374151] mb-1'
@@ -606,6 +782,20 @@ function EntryPageInner() {
 
       {/* ── LEFT FORM 40% ── */}
       <div className="w-[40%] flex flex-col gap-3 overflow-y-auto pb-6">
+        {/* L-15 + Expenses quick buttons */}
+        <div className="flex items-center gap-2">
+          <button onClick={() => { fetchL15(); setShowL15(true) }}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border hover:bg-gray-50"
+            style={{ borderColor: '#e5e7eb' }}>
+            <Plus size={12} /> L-15 Entries
+          </button>
+          <button onClick={openExpensePopup}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border hover:bg-gray-50"
+            style={{ borderColor: '#e5e7eb' }}>
+            <Plus size={12} /> Expenses
+          </button>
+        </div>
+
         <div className="flex items-center justify-between">
           <h1 className="text-lg font-bold text-[#1a1a1a]">New Entry</h1>
           <span className="text-xs text-[#6b7280] bg-[#f0fdf4] px-2 py-1 rounded font-medium">
@@ -629,7 +819,7 @@ function EntryPageInner() {
                 if (!e.target.value) {
                   setSelectedCustomer(null)
                   setCustomerCards([])
-                  setCommPct(DEFAULT_COMM.toString())
+                  setAccountEntries(prev => prev.map(e => ({ ...e, commPct: String(DEFAULT_COMM) })))
                 }
               }}
               onFocus={() => custSearch.length >= 2 && setShowCustDrop(true)}
@@ -691,7 +881,7 @@ function EntryPageInner() {
           </div>
         )}
 
-        {/* 3. Bank Card */}
+        {/* 2. Bank Card */}
         <div>
           <label className={labelCls}>Bank Card</label>
           {customerCards.length > 0 && !customBankCard ? (
@@ -746,260 +936,230 @@ function EntryPageInner() {
           )}
         </div>
 
-        {/* 4. Commission % + Type */}
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={labelCls}>
-              Commission %
-              <span className="text-[10px] ml-1 font-normal" style={{ color: commAutoSource ? '#3ECF8E' : '#9ca3af' }}>
-                {commAutoSource ? `auto-filled` : selectedCustomer ? `(from customer)` : '(default)'}
-              </span>
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              className={inputCls}
-              style={{ borderColor: '#e5e7eb' }}
-              value={commPct}
-              onChange={e => { setCommPct(e.target.value); setCommAutoSource(null) }}
-              placeholder="2.20"
-            />
-          </div>
-          <div>
-            <label className={labelCls}>
-              Commission Type
-              {commAutoSource && <span className="text-[10px] ml-1 font-normal" style={{ color: '#3ECF8E' }}>auto-filled</span>}
-            </label>
-            <select
-              className={`${inputCls} bg-white`}
-              style={{ borderColor: '#e5e7eb' }}
-              value={commType}
-              onChange={e => setCommType(e.target.value)}
-            >
-              <option value="Inclusive">Inclusive</option>
-              <option value="Exclusive">Exclusive</option>
-              <option value="Deferred">Deferred</option>
-            </select>
-          </div>
-        </div>
-        {/* Commission note */}
-        <div className="rounded-md px-3 py-2 text-xs" style={{
-          background: commType === 'Inclusive' ? '#f0fdf4' : commType === 'Exclusive' ? '#eff6ff' : '#fefce8',
-          color: commType === 'Inclusive' ? '#065f46' : commType === 'Exclusive' ? '#1e40af' : '#854d0e',
-          border: `1px solid ${commType === 'Inclusive' ? '#bbf7d0' : commType === 'Exclusive' ? '#bfdbfe' : '#fde68a'}`,
-        }}>
-          {commType === 'Inclusive' && <>Swap Amount = Total + Commission — customer pays full amount including commission.</>}
-          {commType === 'Exclusive' && <>Swap Amount = Total only — commission collected separately in cash from customer.</>}
-          {commType === 'Deferred' && <>Swap Amount = Total only — commission not collected now; added to customer outstanding.</>}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          {/* 5. Total Amount */}
-          <div>
-            <label className={labelCls}>Total Amount (₹)</label>
-            <input
-              type="number"
-              className={inputCls}
-              style={{ borderColor: '#e5e7eb' }}
-              value={form.totalAmount}
-              onChange={e => setForm(f => ({ ...f, totalAmount: e.target.value }))}
-              placeholder="0"
-            />
-          </div>
-
-          {/* 6. Paid Amount */}
-          <div>
-            <label className={labelCls}>
-              Paid Amount (₹)
-              <span className="text-[10px] text-[#9ca3af] ml-1 font-normal">auto-fills</span>
-            </label>
-            <input
-              type="number"
-              className={inputCls}
-              style={{ borderColor: '#e5e7eb' }}
-              value={form.paidAmount}
-              onChange={e => setForm(f => ({ ...f, paidAmount: e.target.value }))}
-              placeholder="0"
-            />
-          </div>
-        </div>
-
-        {/* 7. Account Name */}
-        <div ref={acctRef}>
-          <label className={labelCls}>Account Name</label>
-          <div
-            className="min-h-[38px] rounded-md border px-2 py-1 cursor-pointer flex flex-wrap gap-1 items-center"
-            style={{ borderColor: acctDropOpen ? '#3ECF8E' : '#e5e7eb' }}
-            onClick={() => setAcctDropOpen(o => !o)}
-          >
-            {form.accountNames.map(a => (
-              <span
-                key={a}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
-                style={{ background: '#d1fae5', color: '#065f46' }}
-                onClick={e => { e.stopPropagation(); toggleAccount(a) }}
-              >
-                {a} <X size={10} />
-              </span>
-            ))}
-            {form.accountNames.length === 0 && (
-              <span className="text-xs text-[#9ca3af]">Click to select accounts...</span>
-            )}
-            <ChevronDown size={12} color="#9ca3af" className="ml-auto" />
-          </div>
-          {acctDropOpen && (
-            <div
-              className="relative z-20 bg-white border rounded-md shadow-lg mt-1 p-2"
-              style={{ borderColor: '#e5e7eb' }}
-              onClick={e => e.stopPropagation()}
-            >
-              <div className="flex flex-wrap gap-1 mb-2 max-h-32 overflow-y-auto">
-                {ACCOUNT_OPTIONS.map(opt => (
-                  <button
-                    key={opt}
-                    type="button"
-                    onClick={() => toggleAccount(opt)}
-                    className="px-2 py-0.5 rounded-full text-xs font-medium border transition-colors"
-                    style={{
-                      background: form.accountNames.includes(opt) ? '#3ECF8E' : '#f3f4f6',
-                      color: form.accountNames.includes(opt) ? '#fff' : '#374151',
-                      borderColor: form.accountNames.includes(opt) ? '#3ECF8E' : '#e5e7eb',
-                    }}
-                  >
-                    {opt}
-                  </button>
-                ))}
-              </div>
-              <div className="flex gap-1">
-                <input
-                  className="flex-1 border rounded px-2 py-1 text-xs outline-none focus:border-[#3ECF8E]"
-                  style={{ borderColor: '#e5e7eb' }}
-                  placeholder="Custom account..."
-                  value={acctCustomInput}
-                  onChange={e => setAcctCustomInput(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustomAccount() } }}
-                />
-                <button
-                  type="button"
-                  className="px-2 py-1 rounded text-xs font-medium text-white"
-                  style={{ background: '#3ECF8E' }}
-                  onClick={addCustomAccount}
+        {/* 3–N. Account Entries — Chrome-style tabs */}
+        <div className="rounded-lg border overflow-visible" style={{ borderColor: '#e5e7eb' }}>
+          {/* Tab bar */}
+          <div className="flex items-end overflow-x-auto" style={{ background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', minHeight: 38 }}>
+            {accountEntries.map((entry, idx) => {
+              const isActive = entry.id === activeEntryId
+              return (
+                <div
+                  key={entry.id}
+                  onClick={() => setActiveEntryId(entry.id)}
+                  className="flex items-center gap-1 cursor-pointer select-none flex-shrink-0"
+                  style={{
+                    padding: '6px 12px 6px 12px',
+                    background: isActive ? '#ffffff' : 'transparent',
+                    borderRight: '1px solid #e5e7eb',
+                    borderTop: isActive ? '2px solid #3ECF8E' : '2px solid transparent',
+                    borderBottom: isActive ? '1px solid #ffffff' : 'none',
+                    marginBottom: isActive ? -1 : 0,
+                    fontSize: 12,
+                    fontWeight: isActive ? 600 : 400,
+                    color: isActive ? '#1a1a1a' : '#6b7280',
+                    whiteSpace: 'nowrap',
+                    transition: 'background 0.1s',
+                  }}
                 >
-                  Add
-                </button>
-              </div>
-            </div>
-          )}
-          {form.accountNames.length > 0 && (
-            <p className="text-[10px] text-[#9ca3af] mt-0.5">Saved as: {form.accountNames.join('+')}</p>
-          )}
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          {/* 8. Swap Amount */}
-          <div>
-            <label className={labelCls}>
-              Swap Amount (₹)
-              <span className="text-[10px] text-[#9ca3af] ml-1 font-normal">auto-suggests</span>
-            </label>
-            <input
-              type="number"
-              className={inputCls}
-              style={{ borderColor: '#e5e7eb' }}
-              value={form.swapAmount}
-              onChange={e => setForm(f => ({ ...f, swapAmount: e.target.value }))}
-              placeholder="0"
-            />
-          </div>
-
-          {/* 10. Difference */}
-          <div>
-            <label className={labelCls}>Difference (₹)</label>
-            <input
-              type="number"
-              className={inputCls}
-              style={{ borderColor: '#e5e7eb' }}
-              value={form.difference}
-              onChange={e => setForm(f => ({ ...f, difference: e.target.value }))}
-              placeholder="Optional"
-            />
-          </div>
-        </div>
-
-        {/* 9. Swap Name */}
-        <div ref={swapRef}>
-          <label className={labelCls}>Swap Name</label>
-          <div
-            className="min-h-[38px] rounded-md border px-2 py-1 flex flex-wrap gap-1 items-center"
-            style={{ borderColor: swapFocused ? '#3ECF8E' : '#e5e7eb' }}
-          >
-            {form.swapNames.map(s => (
-              <span
-                key={s}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
-                style={{ background: '#d1fae5', color: '#065f46' }}
-              >
-                {s}
-                <button
-                  type="button"
-                  onClick={() => setForm(f => ({ ...f, swapNames: f.swapNames.filter(n => n !== s) }))}
-                >
-                  <X size={10} />
-                </button>
-              </span>
-            ))}
-            <input
-              className="flex-1 min-w-[120px] text-xs outline-none bg-transparent"
-              placeholder="Type machine name and press Enter..."
-              value={swapInput}
-              onFocus={() => { setSwapFocused(true); setShowSwapSugg(true) }}
-              onBlur={() => setSwapFocused(false)}
-              onChange={e => { setSwapInput(e.target.value); setShowSwapSugg(true) }}
-              onKeyDown={e => {
-                if (e.key === 'Enter' || e.key === ',' || e.key === '+') {
-                  e.preventDefault()
-                  addSwapName()
-                }
+                  <span>{entry.accountName || `Account ${idx + 1}`}</span>
+                  {accountEntries.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); removeEntry(entry.id) }}
+                      style={{ marginLeft: 4, color: '#9ca3af', background: 'none', border: 'none', padding: 0, cursor: 'pointer', lineHeight: 1 }}
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+            {/* + New tab button */}
+            <button
+              type="button"
+              onClick={addEntry}
+              style={{
+                padding: '6px 10px',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color: '#6b7280',
+                fontSize: 16,
+                lineHeight: 1,
+                flexShrink: 0,
               }}
-            />
+              title="Add account"
+            >+</button>
           </div>
-          {showSwapSugg && filteredSwapSugg.length > 0 && (
-            <div
-              className="relative z-20 bg-white border rounded-md shadow-md mt-1 p-1.5 flex flex-wrap gap-1 max-h-24 overflow-y-auto"
-              style={{ borderColor: '#e5e7eb' }}
-            >
-              {filteredSwapSugg.slice(0, 15).map(s => (
-                <button
-                  key={s}
-                  type="button"
-                  onMouseDown={() => addSwapName(s)}
-                  className="px-2 py-0.5 rounded-full text-xs font-medium border hover:bg-[#3ECF8E] hover:text-white hover:border-[#3ECF8E] transition-colors"
-                  style={{ background: '#f3f4f6', color: '#374151', borderColor: '#e5e7eb' }}
+
+          {/* Active tab content */}
+          {accountEntries.filter(e => e.id === activeEntryId).map(entry => (
+            <div key={entry.id} className="p-3 flex flex-col gap-2.5" style={{ background: '#ffffff' }}>
+              {/* Account Name dropdown */}
+              <div className="relative">
+                <label className={labelCls}>Account Name</label>
+                <div
+                  className="min-h-[36px] rounded-md border px-2 py-1.5 cursor-pointer flex items-center justify-between text-sm"
+                  style={{ borderColor: entry.acctDropOpen ? '#3ECF8E' : '#e5e7eb' }}
+                  onClick={() => updateEntry(entry.id, { acctDropOpen: !entry.acctDropOpen })}
                 >
-                  {s}
-                </button>
-              ))}
+                  {entry.accountName
+                    ? <span className="font-medium text-[#1a1a1a]">{entry.accountName}</span>
+                    : <span className="text-[#9ca3af] text-xs">Select account...</span>}
+                  <ChevronDown size={12} color="#9ca3af" />
+                </div>
+                {entry.accountName && accountBalances[entry.id] != null && (
+                  <div className="mt-1 px-1 text-xs" style={{ color: (accountBalances[entry.id]!.remaining < 50000) ? '#ef4444' : '#6b7280' }}>
+                    Remaining: ₹{accountBalances[entry.id]!.remaining.toLocaleString('en-IN')}
+                    {accountBalances[entry.id]!.remaining < 50000 && <span className="ml-1 font-semibold">⚠️ Low</span>}
+                  </div>
+                )}
+                {entry.acctDropOpen && (
+                  <div className="absolute z-30 left-0 right-0 bg-white border rounded-md shadow-lg mt-1 p-2" style={{ borderColor: '#e5e7eb' }}>
+                    <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                      {accountOptions.length === 0
+                        ? <span className="text-xs text-[#9ca3af] px-1">No accounts found. Add in Bank Accounts page.</span>
+                        : accountOptions.map(opt => (
+                          <button key={opt} type="button"
+                            onClick={() => selectAccountForEntry(entry.id, opt)}
+                            className="px-2 py-0.5 rounded-full text-xs font-medium border transition-colors"
+                            style={{ background: entry.accountName === opt ? '#3ECF8E' : '#f3f4f6', color: entry.accountName === opt ? '#fff' : '#374151', borderColor: entry.accountName === opt ? '#3ECF8E' : '#e5e7eb' }}
+                          >{opt}</button>
+                        ))
+                      }
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Machine Name */}
+              <div>
+                <label className={labelCls}>Swipe Machine</label>
+                <input className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                  value={entry.machineName}
+                  onChange={e => updateEntry(entry.id, { machineName: e.target.value })}
+                  placeholder="Auto-filled from account..."
+                />
+              </div>
+
+              {/* Commission */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={labelCls}>Commission %</label>
+                  <input type="number" step="0.01" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                    value={entry.commPct}
+                    onChange={e => updateEntry(entry.id, { commPct: e.target.value })}
+                    placeholder="2.20"
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Commission Type</label>
+                  <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
+                    value={entry.commType}
+                    onChange={e => updateEntry(entry.id, { commType: e.target.value })}
+                  >
+                    <option value="Inclusive">Inclusive</option>
+                    <option value="Exclusive">Exclusive</option>
+                    <option value="Deferred">Deferred</option>
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className={labelCls}>Commission Pay Mode</label>
+                  <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
+                    value={entry.commPayMode}
+                    onChange={e => updateEntry(entry.id, { commPayMode: e.target.value })}
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="UPI">UPI</option>
+                    <option value="Net Banking">Net Banking</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Total + Paid */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={labelCls}>Total Amount (₹)</label>
+                  <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                    value={entry.totalAmount}
+                    onChange={e => updateEntry(entry.id, { totalAmount: e.target.value })}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Paid Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
+                  <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                    value={entry.paidAmount}
+                    onChange={e => updateEntry(entry.id, { paidAmount: e.target.value })}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  {(() => {
+                    const cashVal = parseFloat(entry.paidInCash) || 0
+                    const totalVal = parseFloat(entry.totalAmount) || 0
+                    const cashExceeds = cashVal > totalVal && totalVal > 0
+                    return (
+                      <>
+                        <label className={labelCls}>
+                          Paid in Cash (₹)
+                          {cashExceeds && <span className="ml-1 text-[10px] text-red-500 font-semibold">exceeds total!</span>}
+                        </label>
+                        <input type="number" className={inputCls}
+                          style={{ borderColor: cashExceeds ? '#ef4444' : '#e5e7eb', background: cashExceeds ? '#fff5f5' : '' }}
+                          value={entry.paidInCash}
+                          onChange={e => {
+                            const v = parseFloat(e.target.value) || 0
+                            const total = parseFloat(entry.totalAmount) || 0
+                            if (total > 0 && v > total) {
+                              updateEntry(entry.id, { paidInCash: String(total) })
+                            } else {
+                              updateEntry(entry.id, { paidInCash: e.target.value })
+                            }
+                          }}
+                          placeholder="0"
+                        />
+                      </>
+                    )
+                  })()}
+                </div>
+              </div>
+
+              {/* Swap + Difference */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={labelCls}>Swap Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
+                  <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                    value={entry.swapAmount}
+                    onChange={e => updateEntry(entry.id, { swapAmount: e.target.value })}
+                    placeholder="0"
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Difference (₹)</label>
+                  <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                    value={entry.difference}
+                    onChange={e => updateEntry(entry.id, { difference: e.target.value })}
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+
+              {/* Remarks */}
+              <div>
+                <label className={labelCls}>Remarks</label>
+                <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
+                  value={entry.remarks}
+                  onChange={e => updateEntry(entry.id, { remarks: e.target.value })}
+                >
+                  {REMARKS_OPTS.map(r => <option key={r}>{r}</option>)}
+                </select>
+              </div>
             </div>
-          )}
-          {form.swapNames.length > 0 && (
-            <p className="text-[10px] text-[#9ca3af] mt-0.5">Saved as: {form.swapNames.join('+')}</p>
-          )}
+          ))}
         </div>
 
-        {/* 11. Remarks */}
-        <div>
-          <label className={labelCls}>Remarks</label>
-          <select
-            className={`${inputCls} bg-white`}
-            style={{ borderColor: '#e5e7eb' }}
-            value={form.remarks}
-            onChange={e => setForm(f => ({ ...f, remarks: e.target.value }))}
-          >
-            {REMARKS_OPTS.map(r => <option key={r}>{r}</option>)}
-          </select>
-        </div>
-
-        {/* 12. Commodity Calculator */}
+        {/* Commodity Calculator */}
         <div>
           <div
             onClick={() => {
@@ -1042,9 +1202,12 @@ function EntryPageInner() {
                           value={item.commodity_id}
                           onChange={e => {
                             const c = availableCommodities.find(x => x.id === e.target.value)
+                            const totalSwap = accountEntries.reduce((s, ae) => s + (parseFloat(ae.swapAmount) || 0), 0)
+                            const price = c?.current_price ?? 0
+                            const autoQty = price > 0 ? Math.ceil(totalSwap / price) : 1
                             setCommodityItems(prev => {
                               const next = [...prev]
-                              next[i] = { ...next[i], commodity_id: e.target.value, name: c?.name ?? '', unit: c?.unit ?? 'pcs', price: c?.current_price ?? 0, subtotal: (c?.current_price ?? 0) * next[i].qty }
+                              next[i] = { ...next[i], commodity_id: e.target.value, name: c?.name ?? '', unit: c?.unit ?? 'pcs', price, qty: autoQty, subtotal: price * autoQty }
                               return next
                             })
                           }}
@@ -1108,8 +1271,27 @@ function EntryPageInner() {
                 >
                   <Plus size={12} /> Add Row
                 </button>
-                <div style={{ fontSize: '13px', fontWeight: 700, color: '#4c1d95' }}>
-                  Total: ₹{commodityItems.reduce((s, r) => s + r.subtotal, 0).toLocaleString('en-IN')}
+                <div style={{ textAlign: 'right' }}>
+                  {(() => {
+                    const subtotal = commodityItems.reduce((s, r) => s + r.subtotal, 0)
+                    const totalSwap = accountEntries.reduce((s, ae) => s + (parseFloat(ae.swapAmount) || 0), 0)
+                    const discount = subtotal > 0 ? subtotal - totalSwap : 0
+                    return (
+                      <>
+                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
+                          Subtotal: ₹{subtotal.toLocaleString('en-IN')}
+                        </div>
+                        {discount > 0 && (
+                          <div style={{ fontSize: '12px', color: '#dc2626' }}>
+                            Discount: −₹{discount.toLocaleString('en-IN')}
+                          </div>
+                        )}
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: '#4c1d95' }}>
+                          Invoice Total: ₹{totalSwap > 0 ? totalSwap.toLocaleString('en-IN') : subtotal.toLocaleString('en-IN')}
+                        </div>
+                      </>
+                    )
+                  })()}
                 </div>
               </div>
               <p style={{ fontSize: '11px', color: '#7c3aed', marginTop: '4px' }}>
@@ -1132,11 +1314,16 @@ function EntryPageInner() {
               </div>
               {generatedInvoice.items.map((item, i) => (
                 <div key={i} style={{ fontSize: '12px', color: '#6b7280' }}>
-                  {item.name}: {item.qty} {item.unit} — ₹{Number(item.subtotal).toLocaleString('en-IN')}
+                  {item.name}: {item.qty} {item.unit} × ₹{Number(item.price).toLocaleString('en-IN')} = ₹{Number(item.subtotal).toLocaleString('en-IN')}
                 </div>
               ))}
+              {Number(generatedInvoice.subtotal) > Number(generatedInvoice.total_amount) && (
+                <div style={{ fontSize: '12px', color: '#dc2626' }}>
+                  Discount: −₹{(Number(generatedInvoice.subtotal) - Number(generatedInvoice.total_amount)).toLocaleString('en-IN')}
+                </div>
+              )}
               <div style={{ fontSize: '13px', fontWeight: 600, color: '#166534', marginTop: '4px' }}>
-                Total: ₹{Number(generatedInvoice.total_amount).toLocaleString('en-IN')}
+                Invoice Total: ₹{Number(generatedInvoice.total_amount).toLocaleString('en-IN')}
               </div>
               <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
                 <button
@@ -1341,6 +1528,137 @@ function EntryPageInner() {
           )}
         </div>
       </div>
+
+      {/* ── L-15 Modal ── */}
+      {showL15 && (
+        <>
+          <div className="fixed inset-0 bg-black/40 z-50" onClick={() => setShowL15(false)} />
+          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-2xl z-[60] flex flex-col" style={{ width: 520, maxHeight: '85vh' }}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#e5e7eb]">
+              <div>
+                <h2 className="font-semibold text-sm text-[#1a1a1a]">L-15 Walk-in Cash Entries</h2>
+                <p className="text-xs text-[#6b7280]">{today}</p>
+              </div>
+              <button onClick={() => setShowL15(false)} className="p-1 hover:bg-gray-100 rounded"><X size={16} color="#6b7280" /></button>
+            </div>
+            <div className="px-5 py-3 border-b border-[#e5e7eb] flex flex-col gap-2">
+              <div className="flex gap-2">
+                <input placeholder="Customer name" value={l15Name} onChange={e => setL15Name(e.target.value)}
+                  className="flex-1 border rounded px-2.5 py-1.5 text-xs outline-none focus:border-[#3ECF8E]"
+                  style={{ borderColor: '#e5e7eb' }} />
+                <input type="number" placeholder="Amount" value={l15Amount} onChange={e => setL15Amount(e.target.value)}
+                  className="w-28 border rounded px-2.5 py-1.5 text-xs outline-none focus:border-[#3ECF8E]"
+                  style={{ borderColor: '#e5e7eb' }} />
+              </div>
+              <div className="flex gap-2">
+                <input placeholder="Notes (optional)" value={l15Notes} onChange={e => setL15Notes(e.target.value)}
+                  className="flex-1 border rounded px-2.5 py-1.5 text-xs outline-none focus:border-[#3ECF8E]"
+                  style={{ borderColor: '#e5e7eb' }} />
+                <button onClick={addL15Entry} disabled={l15Saving}
+                  className="px-3 py-1.5 rounded text-xs font-semibold text-white"
+                  style={{ background: '#3ECF8E', opacity: l15Saving ? 0.6 : 1 }}>
+                  {l15Saving ? 'Adding…' : 'Add'}
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              {l15Entries.length === 0 ? (
+                <div className="text-xs text-[#9ca3af] text-center py-8">No L-15 entries for today</div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="bg-[#f9f9f9] sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-[#6b7280] font-medium">Name</th>
+                      <th className="px-3 py-2 text-right text-[#6b7280] font-medium">Amount</th>
+                      <th className="px-3 py-2 text-left text-[#6b7280] font-medium">Notes</th>
+                      <th className="px-3 py-2 w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {l15Entries.map(e => (
+                      <tr key={e.id} className="border-t border-[#e5e7eb]">
+                        <td className="px-3 py-2">{e.customer_name}</td>
+                        <td className="px-3 py-2 text-right font-medium">₹{Number(e.amount).toLocaleString('en-IN')}</td>
+                        <td className="px-3 py-2 text-[#6b7280]">{e.notes || '—'}</td>
+                        <td className="px-3 py-2">
+                          <button onClick={() => deleteL15Entry(e.id)} className="text-red-400 hover:text-red-600">✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="px-5 py-3 border-t border-[#e5e7eb] flex justify-between items-center">
+              <span className="text-xs text-[#6b7280]">Total L-15 Cash</span>
+              <span className="text-sm font-bold text-[#1a1a1a]">
+                ₹{l15Entries.reduce((s, e) => s + Number(e.amount), 0).toLocaleString('en-IN')}
+              </span>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Expenses Modal ── */}
+      {showExpense && (
+        <>
+          <div className="fixed inset-0 bg-black/40 z-50" onClick={() => setShowExpense(false)} />
+          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-2xl z-[60] flex flex-col" style={{ width: 580, maxHeight: '88vh' }}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#e5e7eb]">
+              <div>
+                <h2 className="font-semibold text-sm text-[#1a1a1a]">Daily Expenses</h2>
+                <p className="text-xs text-[#6b7280]">{today}</p>
+              </div>
+              <button onClick={() => setShowExpense(false)} className="p-1 hover:bg-gray-100 rounded"><X size={16} color="#6b7280" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-5 py-3 flex flex-col gap-4">
+              {Object.entries({ office: '🏢 Office', transport: '🚗 Transport', utility: '⚡ Utilities', salary: '👤 Salaries', on_hand: '💰 On Hand', rent: '🏠 Rent', other: '📦 Other' }).map(([cat, label]) => {
+                const catRows = chamundaExpenseRows.filter(r => expenseMaster.find(em => em.id === r.expense_id && em.category === cat))
+                if (catRows.length === 0) return null
+                return (
+                  <div key={cat}>
+                    <div className="text-xs font-semibold text-[#374151] mb-1.5">{label}</div>
+                    <div className="flex flex-col gap-1.5">
+                      {catRows.map(row => (
+                        <div key={row.id} className="flex items-center gap-2">
+                          <span className="text-xs text-[#374151] w-36 flex-shrink-0">{row.expense_name}</span>
+                          <input type="number" placeholder="0" value={expenseEdits[row.id]?.amount ?? ''}
+                            onChange={e => setExpenseEdits(ed => ({ ...ed, [row.id]: { ...ed[row.id], amount: e.target.value } }))}
+                            className="w-28 border rounded px-2 py-1 text-xs outline-none focus:border-[#3ECF8E]" style={{ borderColor: '#e5e7eb' }} />
+                          <input placeholder="Notes" value={expenseEdits[row.id]?.note ?? ''}
+                            onChange={e => setExpenseEdits(ed => ({ ...ed, [row.id]: { ...ed[row.id], note: e.target.value } }))}
+                            className="flex-1 border rounded px-2 py-1 text-xs outline-none focus:border-[#3ECF8E]" style={{ borderColor: '#e5e7eb' }} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+              <div className="border-t border-[#e5e7eb] pt-3">
+                <div className="text-xs font-semibold text-[#374151] mb-2">+ Add Custom Expense</div>
+                <div className="flex gap-2 flex-wrap">
+                  <input placeholder="Expense name" value={newExpName} onChange={e => setNewExpName(e.target.value)}
+                    className="border rounded px-2 py-1 text-xs outline-none focus:border-[#3ECF8E] w-36" style={{ borderColor: '#e5e7eb' }} />
+                  <input type="number" placeholder="Amount" value={newExpAmt} onChange={e => setNewExpAmt(e.target.value)}
+                    className="border rounded px-2 py-1 text-xs outline-none focus:border-[#3ECF8E] w-24" style={{ borderColor: '#e5e7eb' }} />
+                  <select value={newExpCat} onChange={e => setNewExpCat(e.target.value)}
+                    className="border rounded px-2 py-1 text-xs outline-none focus:border-[#3ECF8E] bg-white" style={{ borderColor: '#e5e7eb' }}>
+                    {Object.entries({ office: '🏢 Office', transport: '🚗 Transport', utility: '⚡ Utilities', salary: '👤 Salaries', on_hand: '💰 On Hand', rent: '🏠 Rent', other: '📦 Other' }).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                  <button onClick={addCustomExpense} className="px-3 py-1 rounded text-xs font-medium text-white" style={{ background: '#3ECF8E' }}>Add</button>
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-[#e5e7eb]">
+              <button onClick={saveExpenses} disabled={expenseSaving}
+                className="w-full py-2 rounded text-sm font-semibold text-white"
+                style={{ background: '#3ECF8E', opacity: expenseSaving ? 0.6 : 1 }}>
+                {expenseSaving ? 'Saving…' : 'Save Expenses'}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

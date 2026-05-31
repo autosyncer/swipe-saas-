@@ -115,7 +115,8 @@ export default function TransactionsPage() {
             const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style')).map(el => el.outerHTML).join('\n')
             win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8">${styles}</head><body style="margin:0;padding:0;background:#fff"></body></html>`)
             win.document.close()
-            createRoot(win.document.body).render(createElement(A4, { transactions: txns.slice(0, 4).map(t => transactionToReceiptProps(t)) }))
+            const receiptProps = await Promise.all(txns.slice(0, 4).map(t => transactionToReceiptProps(t)))
+            createRoot(win.document.body).render(createElement(A4, { transactions: receiptProps }))
             setTimeout(() => { win.focus(); win.print(); win.close() }, 600)
           }}
         >
@@ -163,7 +164,7 @@ export default function TransactionsPage() {
                   <td className="px-3 py-2.5" onClick={e => e.stopPropagation()}>
                     <button
                       className="flex items-center gap-1 px-2 py-1 rounded text-xs border border-[#e5e7eb] hover:bg-gray-50 whitespace-nowrap"
-                      onClick={() => setReceiptData(transactionToReceiptProps(t))}
+                      onClick={async () => setReceiptData(await transactionToReceiptProps(t))}
                     >
                       <Printer size={11} /> Receipt
                     </button>

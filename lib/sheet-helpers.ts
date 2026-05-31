@@ -19,6 +19,7 @@ export async function createCCSheetRow(transaction: Record<string, unknown>) {
     const customerAmount = swipeAmount - bankCommission
     const { error } = await supabase.from('cc_sheet').insert({
       transaction_id: transaction.id,
+      sr_no: transaction.sr_no ? Number(transaction.sr_no) : null,
       machine_id: matchedMachine ? matchedMachine.id : null,
       tid: matchedMachine ? String(matchedMachine.tid) : '',
       machine_name: matchedMachine ? String(matchedMachine.machine_name) : swapName,
@@ -58,6 +59,7 @@ export async function createChamundaSheetRow(transaction: Record<string, unknown
       transaction_id: transaction.id || null,
       bank_charge_pct: 3.00,
       paid_amount: Number(transaction.paid_amount) || 0,
+      ...(transaction.paid_in_cash ? { paid_in_cash: Number(transaction.paid_in_cash) } : {}),
       swap_amount: Number(transaction.swap_amount) || 0,
       commission_pct: commPct,
       commission_type: commStr,
@@ -84,7 +86,8 @@ export async function createChamundaSheetRow(transaction: Record<string, unknown
 // ── Customer Sheet ────────────────────────────────────────────────────────────
 export async function createCustomerSheetRow(
   transaction: Record<string, unknown>,
-  customerId?: string | null
+  customerId?: string | null,
+  reminderDate?: string | null
 ) {
   try {
     let cardNumber = '', pin = '', cvvExpiry = '', dueDate: string | null = null, cardNetwork = ''
@@ -96,10 +99,11 @@ export async function createCustomerSheetRow(
         cardNumber = String(c.card_number || '')
         pin = String(c.pin || '')
         cvvExpiry = c.cvv ? `${c.cvv}/${c.expiry || ''}` : String(c.expiry || '')
-        dueDate = c.due_date ? String(c.due_date) : null
         cardNetwork = String(c.card_type || '')
       }
     }
+    // Only use reminder date from entry form — ignore card's due_date
+    dueDate = reminderDate || null
     const totalAmt = Number(transaction.total_amount) || 0
     const paidAmt  = Number(transaction.paid_amount) || 0
     const swapAmt  = Number(transaction.swap_amount) || 0
@@ -123,7 +127,7 @@ export async function createCustomerSheetRow(
       swap_name:       String(transaction.swap_name || ''),
       paid_date:       transaction.remarks === 'PAID' || transaction.remarks === 'Paid' ? String(transaction.date || '') : null,
       card_network:    cardNetwork,
-      date:            String(transaction.date || new Date().toISOString().split('T')[0]),
+      date:            String(transaction.date || (() => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` })()),
     })
     if (error) console.error('[Customer Sheet] insert error:', error.message)
   } catch (err) {

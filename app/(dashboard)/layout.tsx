@@ -3,6 +3,7 @@ import Header from '@/components/Header'
 import { AuthProvider } from '@/lib/auth-context'
 import { DailyReminderPopup } from '@/components/reminders/DailyReminderPopup'
 import { BackupScheduler } from '@/components/backup/BackupScheduler'
+import { MobileNav } from '@/components/pwa/MobileNav'
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -18,6 +19,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </main>
         </div>
       </div>
+      <MobileNav />
     </AuthProvider>
   )
 }

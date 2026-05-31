@@ -19,6 +19,10 @@ export interface Customer {
   name: string
   phone: string
   address?: string
+  consignee_name?: string
+  consignee_address?: string
+  buyer_name?: string
+  buyer_address?: string
   default_charge_pct: number
   outstanding_balance: number
   created_at?: string
@@ -45,6 +49,7 @@ export interface CustomerBankAccount {
   bank_name: string
   account_number: string
   ifsc_code: string
+  branch?: string
   account_type: string
   created_at?: string
 }

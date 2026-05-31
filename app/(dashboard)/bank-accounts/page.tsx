@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { logAction } from '@/lib/audit-log'
+import { loadStoreSettings, saveStoreSettings, StoreSettings } from '@/lib/store-settings'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface BankAccount {
@@ -38,6 +39,12 @@ interface AccountDetails {
 
 const ACCOUNT_TYPES = ['Current', 'Savings', 'OD', 'CC']
 const COMMISSION_TYPES = ['Inclusive', 'Exclusive', 'Deferred']
+const MACHINE_TYPE_OPTIONS = ['BONUSHUB','EZETAP','HDFC','FDRL','BOB','INDUS','YES','INSTA','PTM','GPAY','OTHER']
+
+const EMPTY_MACHINE = {
+  machine_name: '', tid: '', machine_type: 'BONUSHUB',
+  agent_code: '', bank_commission_pct: '1.320',
+}
 const ADD_AMOUNT_OPTIONS = [
   { value: 'bal_recd',     label: 'BAL RECD (received)' },
   { value: 'trn_bal_recd', label: 'TRN BAL RECD (transfer received)' },
@@ -55,6 +62,15 @@ const EMPTY_FORM = {
   commission_pct: '', commission_type: 'Inclusive',
   notes: '', contact_person: '', contact_phone: '',
   opening_balance: '0',
+}
+
+interface SwipeMachineLinked {
+  id?: string
+  machine_name: string
+  tid: string
+  machine_type: string
+  agent_code: string
+  bank_commission_pct: string
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -108,20 +124,44 @@ function AccountPanel({
     }
     return EMPTY_FORM
   })
+  const [machine, setMachine] = useState<SwipeMachineLinked>({ ...EMPTY_MACHINE })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [storeDetails, setStoreDetails] = useState<StoreSettings>(() =>
+    initial ? loadStoreSettings() : loadStoreSettings()
+  )
+  function setSD(k: keyof StoreSettings, v: string) {
+    setStoreDetails(s => ({ ...s, [k]: v }))
+  }
+
+  // On edit mode, fetch linked machine
+  useEffect(() => {
+    if (mode === 'edit' && initial) {
+      supabase.from('swipe_machines').select('*').eq('account_name', initial.account_name).maybeSingle()
+        .then(({ data }) => {
+          if (data) {
+            setMachine({ id: data.id, machine_name: data.machine_name, tid: data.tid, machine_type: data.machine_type, agent_code: data.agent_code || '', bank_commission_pct: String(data.bank_commission_pct) })
+          }
+        })
+    }
+  }, [mode, initial])
 
   function set(k: string, v: string) { setForm(f => ({ ...f, [k]: v })) }
+  function setM(k: string, v: string) { setMachine(m => ({ ...m, [k]: v })) }
 
   async function handleSave() {
     if (!form.account_name.trim()) { setError('Account name is required'); return }
     if (!form.bank_name.trim()) { setError('Bank name is required'); return }
     if (!form.commission_pct) { setError('Commission % is required'); return }
+    if (!machine.machine_name.trim() || !machine.tid.trim()) {
+      setError('Machine Name and TID are required for the swipe machine'); return
+    }
     setError('')
     setSaving(true)
-    
+
+    const accountName = form.account_name.trim().toUpperCase()
     const payload = {
-      account_name: form.account_name.trim().toUpperCase(),
+      account_name: accountName,
       bank_name: form.bank_name.trim().toUpperCase(),
       account_type: form.account_type,
       account_number: form.account_number.trim(),
@@ -135,19 +175,42 @@ function AccountPanel({
       opening_balance: parseFloat(form.opening_balance) || 0,
       ...(mode === 'add' ? { current_balance: parseFloat(form.opening_balance) || 0, is_active: true } : {}),
     }
-    let error: { message: string; code?: string } | null = null
+    let dbError: { message: string; code?: string } | null = null
     if (mode === 'add') {
       const res = await supabase.from('bank_account_master').insert(payload)
-      error = res.error
+      dbError = res.error
     } else {
       const res = await supabase.from('bank_account_master').update(payload).eq('id', initial!.id)
-      error = res.error
+      dbError = res.error
     }
-    setSaving(false)
-    if (error) {
-      setError(error.code === '23505' ? 'Account name already exists' : error.message)
+    if (dbError) {
+      setSaving(false)
+      setError(dbError.code === '23505' ? 'Account name already exists' : dbError.message)
       return
     }
+
+    // Save store details to localStorage
+    saveStoreSettings(storeDetails)
+
+    // Save linked swipe machine
+    if (machine.machine_name.trim() && machine.tid.trim()) {
+      const machinePayload = {
+        machine_name: machine.machine_name.trim().toUpperCase(),
+        tid: machine.tid.trim(),
+        account_name: accountName,
+        machine_type: machine.machine_type,
+        agent_code: machine.agent_code.trim(),
+        bank_commission_pct: parseFloat(machine.bank_commission_pct) || 1.320,
+        status: 'Active',
+      }
+      if (machine.id) {
+        await supabase.from('swipe_machines').update(machinePayload).eq('id', machine.id)
+      } else {
+        await supabase.from('swipe_machines').insert(machinePayload)
+      }
+    }
+
+    setSaving(false)
     logAction({ action: mode === 'add' ? 'Bank Account Added' : 'Bank Account Updated', module: 'Bank Accounts', details: payload }).catch(() => {})
     onSaved()
     onClose()
@@ -157,98 +220,202 @@ function AccountPanel({
     <>
       {/* Backdrop */}
       <div className="fixed inset-0 z-40 bg-black/40" onClick={onClose} />
-      {/* Panel */}
-      <div className="fixed right-0 top-0 h-full z-50 bg-white flex flex-col" style={{ width: 420, boxShadow: '-4px 0 24px rgba(0,0,0,0.15)' }}>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[#e5e7eb] flex-shrink-0">
-          <h2 className="text-base font-bold text-[#1a1a1a]">{mode === 'add' ? 'Add Bank Account' : 'Edit Bank Account'}</h2>
+      {/* Wide side-by-side panel */}
+      <div className="fixed right-0 top-0 h-full z-50 bg-[#f3f4f6] flex flex-col" style={{ width: 860, boxShadow: '-4px 0 24px rgba(0,0,0,0.18)' }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#e5e7eb] bg-white flex-shrink-0">
+          <h2 className="text-base font-bold text-[#1a1a1a]">{mode === 'add' ? 'Add Bank Account + Swipe Machine' : 'Edit Bank Account + Swipe Machine'}</h2>
           <button onClick={onClose} className="p-1 rounded hover:bg-gray-100"><X size={18} color="#6b7280" /></button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          <Section title="Basic Info">
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div>
-                <Label>Account Name *</Label>
-                <input className={inp()} placeholder="NSS, SKT, RT..." value={form.account_name} onChange={e => set('account_name', e.target.value)} />
-              </div>
-              <div>
-                <Label>Bank Name *</Label>
-                <input className={inp()} placeholder="HDFC, SBI, FDRL..." value={form.bank_name} onChange={e => set('bank_name', e.target.value)} />
-              </div>
-            </div>
-            <div>
-              <Label>Account Type</Label>
-              <select className={inp()} value={form.account_type} onChange={e => set('account_type', e.target.value)}>
-                {ACCOUNT_TYPES.map(t => <option key={t}>{t}</option>)}
-              </select>
-            </div>
-          </Section>
+        {/* Two column body */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="grid grid-cols-2 gap-0 h-full">
 
-          <Section title="Account Details">
-            <div className="mb-3">
-              <Label>Account Number</Label>
-              <input className={inp()} placeholder="123456789012" value={form.account_number} onChange={e => set('account_number', e.target.value)} />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>IFSC Code</Label>
-                <input className={inp()} placeholder="HDFC0001234" value={form.ifsc_code} onChange={e => set('ifsc_code', e.target.value.toUpperCase())} />
+            {/* ── LEFT: Bank Account ── */}
+            <div className="bg-white border-r border-[#e5e7eb] flex flex-col">
+              <div className="px-5 py-3 border-b border-[#f3f4f6] flex-shrink-0">
+                <div className="text-[11px] font-bold text-[#3ECF8E] uppercase tracking-widest flex items-center gap-1.5">
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#3ECF8E', display: 'inline-block' }} />
+                  Bank Account
+                </div>
               </div>
-              <div>
-                <Label>Branch</Label>
-                <input className={inp()} placeholder="Main Branch" value={form.branch} onChange={e => set('branch', e.target.value)} />
-              </div>
-            </div>
-          </Section>
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                <Section title="Basic Info">
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <Label>Account Name *</Label>
+                      <input className={inp()} placeholder="NSS, SKT, RT..." value={form.account_name} onChange={e => set('account_name', e.target.value.toUpperCase())} />
+                    </div>
+                    <div>
+                      <Label>Bank Name *</Label>
+                      <input className={inp()} placeholder="HDFC, SBI, FDRL..." value={form.bank_name} onChange={e => set('bank_name', e.target.value.toUpperCase())} />
+                    </div>
+                  </div>
+                  <div>
+                    <Label>Account Type</Label>
+                    <select className={inp()} value={form.account_type} onChange={e => set('account_type', e.target.value)}>
+                      {ACCOUNT_TYPES.map(t => <option key={t}>{t}</option>)}
+                    </select>
+                  </div>
+                </Section>
 
-          <Section title="Commission Settings">
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div>
-                <Label>Commission % *</Label>
-                <input type="number" step="0.001" className={inp()} placeholder="1.320" value={form.commission_pct} onChange={e => set('commission_pct', e.target.value)} />
-              </div>
-              <div>
-                <Label>Commission Type</Label>
-                <select className={inp()} value={form.commission_type} onChange={e => set('commission_type', e.target.value)}>
-                  {COMMISSION_TYPES.map(t => <option key={t}>{t}</option>)}
-                </select>
-              </div>
-            </div>
-            <div>
-              <Label>Notes (optional)</Label>
-              <textarea className={inp()} rows={2} placeholder="Any notes about this account..." value={form.notes} onChange={e => set('notes', e.target.value)} />
-            </div>
-          </Section>
+                <Section title="Account Details">
+                  <div className="mb-3">
+                    <Label>Account Number</Label>
+                    <input className={inp()} placeholder="123456789012" value={form.account_number} onChange={e => set('account_number', e.target.value)} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label>IFSC Code</Label>
+                      <input className={inp()} placeholder="HDFC0001234" value={form.ifsc_code} onChange={e => set('ifsc_code', e.target.value.toUpperCase())} />
+                    </div>
+                    <div>
+                      <Label>Branch</Label>
+                      <input className={inp()} placeholder="Main Branch" value={form.branch} onChange={e => set('branch', e.target.value)} />
+                    </div>
+                  </div>
+                </Section>
 
-          <Section title="Contact">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Contact Person</Label>
-                <input className={inp()} placeholder="Name" value={form.contact_person} onChange={e => set('contact_person', e.target.value)} />
-              </div>
-              <div>
-                <Label>Contact Phone</Label>
-                <input className={inp()} placeholder="9876543210" value={form.contact_phone} onChange={e => set('contact_phone', e.target.value)} />
+                <Section title="Commission Settings">
+                  <div className="mb-3">
+                    <Label>Commission % *</Label>
+                    <input type="number" step="0.001" className={inp()} placeholder="1.320" value={form.commission_pct} onChange={e => set('commission_pct', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Notes (optional)</Label>
+                    <textarea className={inp()} rows={2} placeholder="Any notes about this account..." value={form.notes} onChange={e => set('notes', e.target.value)} />
+                  </div>
+                </Section>
+
+                <Section title="Contact">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label>Contact Person</Label>
+                      <input className={inp()} placeholder="Name" value={form.contact_person} onChange={e => set('contact_person', e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Contact Phone</Label>
+                      <input className={inp()} placeholder="9876543210" value={form.contact_phone} onChange={e => set('contact_phone', e.target.value)} />
+                    </div>
+                  </div>
+                </Section>
+
+                <Section title="Balance">
+                  <div>
+                    <Label>Opening Balance (₹)</Label>
+                    <input type="number" className={inp()} placeholder="0" value={form.opening_balance} onChange={e => set('opening_balance', e.target.value)} />
+                    <p className="text-[10px] text-[#9ca3af] mt-1">Set the initial balance for this account</p>
+                  </div>
+                </Section>
               </div>
             </div>
-          </Section>
 
-          <Section title="Balance">
-            <div>
-              <Label>Opening Balance (₹)</Label>
-              <input type="number" className={inp()} placeholder="0" value={form.opening_balance} onChange={e => set('opening_balance', e.target.value)} />
-              <p className="text-[10px] text-[#9ca3af] mt-1">Set the initial balance for this account</p>
+            {/* ── RIGHT: Swipe Machine ── */}
+            <div className="bg-white flex flex-col">
+              <div className="px-5 py-3 border-b border-[#f3f4f6] flex-shrink-0">
+                <div className="text-[11px] font-bold uppercase tracking-widest flex items-center gap-1.5" style={{ color: '#6366f1' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#6366f1', display: 'inline-block' }} />
+                  Swipe Machine
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                <Section title="Machine Info">
+                  <div className="mb-3">
+                    <Label>Machine Name *</Label>
+                    <input className={inp()} placeholder="e.g. NSS BONUSHUB" value={machine.machine_name} onChange={e => setM('machine_name', e.target.value.toUpperCase())} />
+                  </div>
+                  <div className="mb-3">
+                    <Label>TID *</Label>
+                    <input className={inp()} placeholder="e.g. TID 63012501" value={machine.tid} onChange={e => setM('tid', e.target.value.toUpperCase())} />
+                  </div>
+                  <div>
+                    <Label>Machine Type</Label>
+                    <select className={inp()} value={machine.machine_type} onChange={e => setM('machine_type', e.target.value)}>
+                      {MACHINE_TYPE_OPTIONS.map(t => <option key={t}>{t}</option>)}
+                    </select>
+                  </div>
+                </Section>
+
+                <Section title="Commission & Agent">
+                  <div className="mb-3">
+                    <Label>Agent Code</Label>
+                    <input className={inp()} placeholder="e.g. AMS019" value={machine.agent_code} onChange={e => setM('agent_code', e.target.value.toUpperCase())} />
+                  </div>
+                  <div>
+                    <Label>Bank Commission % (3 decimals)</Label>
+                    <input type="number" step="0.001" className={inp()} placeholder="1.320" value={machine.bank_commission_pct} onChange={e => setM('bank_commission_pct', e.target.value)} />
+                  </div>
+                </Section>
+
+                <div className="mt-4 rounded-lg border border-[#e5e7eb] p-3 bg-[#f9fafb] text-xs text-[#6b7280]">
+                  <div className="font-semibold text-[#374151] mb-1">Linked to account</div>
+                  <div className="font-mono text-[#3ECF8E] font-bold">{form.account_name.trim().toUpperCase() || '—'}</div>
+                  <div className="mt-1 text-[10px]">This machine will be automatically linked to the bank account on the left.</div>
+                </div>
+
+                {/* Store Details */}
+                <div className="mt-4">
+                  <div className="text-[10px] font-bold text-[#9ca3af] uppercase tracking-widest mb-3 pb-1 border-b border-[#f3f4f6]">Store Details</div>
+                  <div className="space-y-3">
+                    <div>
+                      <Label>Store Name</Label>
+                      <input className={inp()} value={storeDetails.name}
+                        onChange={e => setSD('name', e.target.value)}
+                        placeholder="e.g. Mahalaxmi Grain Store" />
+                    </div>
+                    <div>
+                      <Label>Store Address</Label>
+                      <textarea className={inp('resize-none')} rows={3} value={storeDetails.address}
+                        onChange={e => setSD('address', e.target.value)}
+                        placeholder="Shop No., Area, City" />
+                    </div>
+                    <div>
+                      <Label>Store Bank Name</Label>
+                      <input className={inp()} value={storeDetails.bankName}
+                        onChange={e => setSD('bankName', e.target.value)}
+                        placeholder="e.g. BANK OF BARODA CA" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label>Store A/c No.</Label>
+                        <input className={inp()} value={storeDetails.accNo}
+                          onChange={e => setSD('accNo', e.target.value)}
+                          placeholder="Account Number" />
+                      </div>
+                      <div>
+                        <Label>Branch &amp; IFSC</Label>
+                        <input className={inp()} value={storeDetails.ifsc}
+                          onChange={e => setSD('ifsc', e.target.value)}
+                          placeholder="Branch & IFSC Code" />
+                      </div>
+                    </div>
+                    <div>
+                      <Label>Jurisdiction</Label>
+                      <input className={inp()} value={storeDetails.jurisdiction}
+                        onChange={e => setSD('jurisdiction', e.target.value)}
+                        placeholder="SUBJECT TO SURAT JURISDICTION" />
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-          </Section>
 
-          {error && <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2 mb-4">{error}</div>}
+          </div>
         </div>
 
-        <div className="px-5 py-4 border-t border-[#e5e7eb] flex-shrink-0">
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-[#e5e7eb] bg-white flex-shrink-0 flex items-center gap-3">
+          {error && <div className="flex-1 text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">{error}</div>}
+          {!error && <div className="flex-1" />}
+          <button onClick={onClose} className="px-5 py-2.5 rounded-lg text-sm font-medium border text-[#374151] hover:bg-gray-50" style={{ borderColor: '#e5e7eb' }}>
+            Cancel
+          </button>
           <button
             onClick={handleSave}
             disabled={saving}
-            className="w-full py-2.5 rounded-lg text-sm font-bold text-white flex items-center justify-center gap-2 disabled:opacity-60"
+            className="px-8 py-2.5 rounded-lg text-sm font-bold text-white flex items-center gap-2 disabled:opacity-60"
             style={{ background: '#3ECF8E' }}
           >
             {saving ? <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> : <Plus size={15} />}

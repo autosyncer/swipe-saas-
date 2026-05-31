@@ -239,6 +239,28 @@ body {
 }
 
 
+/* ─── PWA Mobile Fixes ───────────────────────────────────── */
+@media (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+  body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  ::-webkit-scrollbar {
+    display: none;
+  }
+  * {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (display-mode: standalone) {
+  .pwa-header {
+    padding-top: calc(12px + env(safe-area-inset-top)) !important;
+  }
+}
+
 /* ─── Print styles ───────────────────────────────────────── */
 @media print {
   body > * { display: none !important; }

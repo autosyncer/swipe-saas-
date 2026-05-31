@@ -96,3 +96,9 @@ grant execute on function generate_invoice_number() to authenticated;
 -- 5. Add commodity_items + invoice_id columns to transactions (optional link)
 alter table transactions add column if not exists commodity_items jsonb default '[]';
 alter table transactions add column if not exists invoice_id uuid references invoices(id) on delete set null;
+
+-- 6. Add customer_address to invoices
+alter table invoices add column if not exists customer_address text default '';
+
+-- Reload schema cache
+notify pgrst, 'reload schema';

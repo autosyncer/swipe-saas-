@@ -19,82 +19,107 @@ export interface PaymentReceiptProps {
   status: string
 }
 
+const B = '1px solid #000'
+const F = "'Courier New', Courier, monospace"
+
+function td(extra?: React.CSSProperties): React.CSSProperties {
+  return { border: B, padding: '5px 8px', fontSize: 11, fontFamily: F, verticalAlign: 'middle' as const, ...extra }
+}
+
 export default function PaymentReceipt({
-  name,
-  mobileNo,
-  srNo,
-  bankCCName,
-  branch,
-  accNo,
-  ifscCode,
-  transactions,
-  totalAmount,
-  status,
+  name, mobileNo, srNo, bankCCName, branch, accNo, ifscCode,
+  transactions, totalAmount, status,
 }: PaymentReceiptProps) {
-  // Always show at least 2 data rows + pad to 2 minimum empty rows
   const dataRows = transactions.length > 0 ? transactions : []
-  const emptyCount = Math.max(0, 2 - dataRows.length)
+
+  // 4 cols: [18%, 32%, 18%, 32%]
+  // Transaction rows use: date=col1, bankName=col2+col3 (colspan2), amount=col4
 
   return (
-    <div className="pr-receipt">
+    <div style={{ border: B, fontFamily: F, fontSize: 11, color: '#000' }}>
 
-      <div className="pr-title-row">PAYMENT RECEIPT</div>
-
-      <div className="pr-info-section">
-        <div className="pr-info-left">
-          <div><span className="pr-info-label">Name:</span> {name}</div>
-          <div><span className="pr-info-label">Mobile No:</span> {mobileNo}</div>
-          <div><span className="pr-info-label">SR No:</span> {srNo}</div>
-        </div>
-        <div className="pr-info-right">
-          <div><span className="pr-info-label">Bank / CC Name:</span> {bankCCName}</div>
-          <div><span className="pr-info-label">Branch:</span> {branch}</div>
-          <div><span className="pr-info-label">AC/CC No:</span> {accNo}</div>
-          <div><span className="pr-info-label">IFSC Code:</span> {ifscCode}</div>
-        </div>
+      {/* Title */}
+      <div style={{ textAlign: 'center', fontWeight: 'bold', fontSize: 13, letterSpacing: 2, padding: '6px 0', borderBottom: B }}>
+        PAYMENT RECEIPT
       </div>
 
-      <div className="pr-table-section">
-        <table className="pr-table">
-          <thead>
-            <tr>
-              <th style={{ width: '22%' }}>Dates</th>
-              <th style={{ width: '46%' }}>Bank Name</th>
-              <th style={{ width: '32%' }}>Amount</th>
-            </tr>
-          </thead>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <colgroup>
+          <col style={{ width: '18%' }} />
+          <col style={{ width: '32%' }} />
+          <col style={{ width: '18%' }} />
+          <col style={{ width: '32%' }} />
+        </colgroup>
+        <tbody>
+
+          {/* Detail rows */}
+          <tr>
+            <td style={td({ fontWeight: 'bold' })}>Name</td>
+            <td style={td()}>{name || '—'}</td>
+            <td style={td({ fontWeight: 'bold' })}>Bank / CC Name</td>
+            <td style={td()}>{bankCCName || '—'}</td>
+          </tr>
+          <tr>
+            <td style={td({ fontWeight: 'bold' })}>Mobile No</td>
+            <td style={td()}>{mobileNo || '—'}</td>
+            <td style={td({ fontWeight: 'bold' })}>Branch</td>
+            <td style={td()}>{branch || '—'}</td>
+          </tr>
+          <tr>
+            <td style={td({ fontWeight: 'bold' })}>SR No</td>
+            <td style={td()}>{srNo || '—'}</td>
+            <td style={td({ fontWeight: 'bold' })}>AC / CC No</td>
+            <td style={td()}>{accNo || '—'}</td>
+          </tr>
+          <tr>
+            <td style={td()}></td>
+            <td style={td()}></td>
+            <td style={td({ fontWeight: 'bold' })}>IFSC Code</td>
+            <td style={td()}>{ifscCode || '—'}</td>
+          </tr>
+
+        </tbody>
+      </table>
+
+      {/* One table per entry */}
+      {dataRows.map((t, i) => (
+        <table key={i} style={{ width: '100%', borderCollapse: 'collapse', borderTop: B }}>
+          <colgroup>
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '32%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '32%' }} />
+          </colgroup>
           <tbody>
-            {dataRows.map((t, i) => (
-              <tr key={i}>
-                <td>{t.date}</td>
-                <td>{t.bankName}</td>
-                <td>{t.amount ? `₹${t.amount.toLocaleString('en-IN')}` : ''}</td>
-              </tr>
-            ))}
-            {Array.from({ length: emptyCount }).map((_, i) => (
-              <tr key={`e${i}`} className="pr-empty">
-                <td></td><td></td><td></td>
-              </tr>
-            ))}
+            <tr>
+              <td style={td({ fontWeight: 'bold', textAlign: 'center', background: '#f0f0f0' })}>Date</td>
+              <td colSpan={2} style={td({ fontWeight: 'bold', textAlign: 'center', background: '#f0f0f0' })}>Bank Name</td>
+              <td style={td({ fontWeight: 'bold', textAlign: 'center', background: '#f0f0f0' })}>Amount</td>
+            </tr>
+            <tr>
+              <td style={td({ textAlign: 'center' })}>{t.date}</td>
+              <td colSpan={2} style={td({ textAlign: 'center' })}>{t.bankName}</td>
+              <td style={td({ textAlign: 'center', fontWeight: 'bold' })}>{t.amount ? `₹${t.amount.toLocaleString('en-IN')}` : ''}</td>
+            </tr>
           </tbody>
         </table>
+      ))}
+
+      {/* Footer */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 8px', borderTop: B, fontSize: 11, fontFamily: F }}>
+        <span><strong>Status:</strong> {status}</span>
+        <span><strong>Total Amount:</strong> {totalAmount ? `₹${totalAmount.toLocaleString('en-IN')}` : '—'}</span>
       </div>
 
-      <div className="pr-status-row">
-        <span className="pr-status"><strong>Status:</strong> {status}</span>
-        <span className="pr-total">
-          <strong>Total Amount:</strong> {totalAmount ? `₹${totalAmount.toLocaleString('en-IN')}` : ''}
-        </span>
-      </div>
-
-      <div className="pr-sign-row">
-        <div className="pr-sign-block">
-          <div className="pr-sign-line"></div>
-          <div className="pr-sign-label">Reciever Sign</div>
+      {/* Signatures */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 10px 8px', fontSize: 11, fontFamily: F }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div style={{ width: 120, borderBottom: B }}></div>
+          <span>Receiver Sign</span>
         </div>
-        <div className="pr-sign-block-right">
-          <div className="pr-sign-line"></div>
-          <div className="pr-sign-label">Signature</div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+          <div style={{ width: 120, borderBottom: B }}></div>
+          <span>Signature</span>
         </div>
       </div>
 

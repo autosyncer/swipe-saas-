@@ -4,7 +4,7 @@ import { usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
-  Home, LayoutGrid, Terminal, Users, CreditCard, Monitor,
+  Home, LayoutGrid, Terminal, Users, CreditCard,
   FileText, Bell, AlertTriangle, BarChart2, List, Grid, Settings, Landmark, Package, Receipt, Workflow
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
@@ -20,7 +20,6 @@ const navGroups = [
   [
     { icon: Users, label: 'Customers', href: '/customers', superOnly: false },
     { icon: CreditCard, label: 'Transactions', href: '/transactions', superOnly: false },
-    { icon: Monitor, label: 'Swipe Machines', href: '/machines', superOnly: false },
     { icon: Landmark, label: 'Bank Accounts', href: '/bank-accounts', superOnly: false },
     { icon: FileText, label: 'Reports', href: '/reports', superOnly: false },
     { icon: Package, label: 'Commodities', href: '/commodities', superOnly: false },

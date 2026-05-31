@@ -86,7 +86,6 @@ const LEFT_SHEETS = [
   { id:'daily_register',  label:'daily_register',  ready:true  },
   { id:'ac_sheet',        label:'ac_sheet',        ready:true  },
   { id:'cc_sheet',        label:'cc_sheet',        ready:true  },
-  { id:'bl_sheet',        label:'bl_sheet',        ready:false },
   { id:'chamunda_sheet',  label:'chamunda_sheet',  ready:true  },
   { id:'customer_sheet',  label:'customer_sheet',  ready:true  },
 ]
@@ -275,7 +274,7 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
     if(!form.totalAmount){  setInsertError('Total amount is required');   return }
     setInsertError(null)
     setSubmitting(true)
-    const today=new Date().toISOString().split('T')[0]
+    const _d=new Date(); const today=`${_d.getFullYear()}-${String(_d.getMonth()+1).padStart(2,'0')}-${String(_d.getDate()).padStart(2,'0')}`
     const comm=parseFloat(form.commPct)||DEFAULT_COMM
     const total=parseFloat(form.totalAmount)||0
     const payload={
@@ -1092,7 +1091,7 @@ function CustomerSheetView() {
   const fetchAll = useCallback(async()=>{
     setLoading(true)
     const [{data: sheetData}, {data: custData}] = await Promise.all([
-      supabase.from('customer_sheet').select('*').order('date',{ascending:true}),
+      supabase.from('customer_sheet').select('*').order('date',{ascending:false}),
       supabase.from('customers').select('id,name').order('name',{ascending:true}),
     ])
     const rows = (sheetData as CustSheetRow[])||[]
@@ -1171,41 +1170,64 @@ function CustomerSheetView() {
     const ExcelJS=(await import('exceljs')).default
     const wb=new ExcelJS.Workbook(); wb.creator='SwipeSaaS'; wb.created=new Date()
     const border={top:{style:'thin' as const,color:{argb:'FF000000'}},bottom:{style:'thin' as const,color:{argb:'FF000000'}},left:{style:'thin' as const,color:{argb:'FF000000'}},right:{style:'thin' as const,color:{argb:'FF000000'}}}
-    const hdrCols=['DUE DATE','CM NAME','CARD','CARD NO','PIN','CVV/EXPRY','TOTAL AMT','PAID AMT','SWAP AMT','COM','PAID REMAINING','SWAP PENDING','A/C NAME','SWAP NAME','PAID DATE','VISA/MASTERCARD']
-    const colWidths=[{width:12},{width:18},{width:10},{width:20},{width:10},{width:12},{width:14},{width:14},{width:14},{width:10},{width:16},{width:14},{width:18},{width:18},{width:14},{width:16}]
-    const uniqueCusts=Array.from(new Map(allRows.map(r=>[r.customer_name,r])).keys())
-    uniqueCusts.forEach(custName=>{
-      const crows=allRows.filter(r=>r.customer_name===custName)
-      const ws=wb.addWorksheet(custName.slice(0,31))
-      ws.columns=colWidths
-      const monthRange=getMonthRange(crows)
-      // Title row — merged
-      ws.mergeCells('A1:P1')
-      const titleCell=ws.getCell('A1')
-      titleCell.value=`${custName}//WITH COM//--${monthRange}`
-      titleCell.font={bold:true,name:'Calibri',size:12}
-      titleCell.alignment={horizontal:'center',vertical:'middle'}
-      titleCell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF92D050'}}
-      titleCell.border=border
-      ws.getRow(1).height=18
+    const hdrCols=['DUE DATE','CUSTOMER NAME','CARD','CARD NO','PIN','CVV/EXPRY','TOTAL AMT','PAID AMT','SWAP AMT','COM','PAID REMAINING','SWAP PENDING','A/C NAME','SWAP NAME','PAID DATE','VISA/MASTERCARD']
+    const colWidths=[{width:12},{width:18},{width:10},{width:14},{width:10},{width:12},{width:14},{width:14},{width:14},{width:10},{width:16},{width:14},{width:18},{width:18},{width:14},{width:16}]
+
+    // Export only the active customer, grouped by date (matching what's on screen)
+    const custName = activeCustomer
+    const ws = wb.addWorksheet(custName.slice(0,31))
+    ws.columns = colWidths
+
+    // Group rows by date same as on screen
+    const dateGroups = new Map<string, CustSheetRow[]>()
+    activeRows.forEach(r => {
+      if(!dateGroups.has(r.date)) dateGroups.set(r.date, [])
+      dateGroups.get(r.date)!.push(r)
+    })
+    const sortedDates = Array.from(dateGroups.entries()).sort(([a],[b])=>b.localeCompare(a))
+
+    let rowNum = 1
+    sortedDates.forEach(([date, drows], gi) => {
+      // Spacer rows between date groups
+      if(gi > 0) { ws.addRow([]); ws.addRow([]); rowNum += 2 }
+
+      // Date title row
+      const fmtD2=(d:string)=>{ if(!d) return ''; const [y,m,dd]=d.split('-'); return `${parseInt(dd)}/${parseInt(m)}/${y.slice(2)}` }
+      ws.mergeCells(rowNum, 1, rowNum, 16)
+      const titleCell = ws.getCell(rowNum, 1)
+      titleCell.value = `DATE ${fmtD2(date)} — ${custName}//WITH COM//--${getMonthRange(drows)}`
+      titleCell.font = {bold:true,name:'Calibri',size:12}
+      titleCell.alignment = {horizontal:'center',vertical:'middle'}
+      titleCell.fill = {type:'pattern',pattern:'solid',fgColor:{argb:'FF92D050'}}
+      titleCell.border = border
+      ws.getRow(rowNum).height = 18
+      rowNum++
+
       // Header row
-      const hRow=ws.addRow(hdrCols)
+      const hRow = ws.addRow(hdrCols); rowNum++
       hRow.eachCell(c=>{ c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF92D050'}}; c.font={bold:true,name:'Calibri',size:11}; c.border=border; c.alignment={horizontal:'center',vertical:'middle'} })
+
       // Data rows
-      crows.forEach((r,i)=>{
-        const dr=ws.addRow([fmtD(r.due_date),r.customer_name,r.card,r.card_number,r.pin,r.cvv_expiry,Number(r.total_amount)||0,Number(r.paid_amount)||0,Number(r.swap_amount)||0,Number(r.commission)||0,Number(r.paid_remaining)||0,Number(r.swap_pending)||0,r.account_name,r.swap_name,fmtD(r.paid_date),r.card_network])
+      drows.forEach((r,i)=>{
+        const last4 = r.card_number ? String(r.card_number).slice(-4) : ''
+        const dr = ws.addRow([fmtD(r.due_date),r.customer_name,r.card,last4,r.pin,r.cvv_expiry,Number(r.total_amount)||0,Number(r.paid_amount)||0,Number(r.swap_amount)||0,Number(r.commission)||0,Number(r.paid_remaining)||0,Number(r.swap_pending)||0,r.account_name,r.swap_name,fmtD(r.paid_date),r.card_network])
+        rowNum++
         const altBg=i%2===1?'FFE8F5E9':'FFFFFFFF'
         dr.eachCell({includeEmpty:true},(c,col)=>{
           c.fill={type:'pattern',pattern:'solid',fgColor:{argb:altBg}}; c.font={name:'Calibri',size:11}; c.border=border
-          if(col>=7&&col<=12){ c.numFmt='#,##0.00'; c.alignment={horizontal:'right',vertical:'middle'} } else { c.alignment={horizontal:'center',vertical:'middle'} }
+          if(col>=7&&col<=12){ c.numFmt='#,##0'; c.alignment={horizontal:'center',vertical:'middle'} } else { c.alignment={horizontal:'center',vertical:'middle'} }
         })
       })
-      if(crows.length===0){ const er=ws.addRow(['No data','','','','','','','','','','','','','','','']); er.eachCell({includeEmpty:true},c=>{ c.border=border; c.alignment={horizontal:'center',vertical:'middle'} }) }
     })
+
+    if(activeRows.length===0){
+      ws.addRow(['No data for '+custName])
+    }
+
     const buf=await wb.xlsx.writeBuffer()
     const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
     const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url
-    const today=new Date(); a.download=`CustomerSheet_${String(today.getDate()).padStart(2,'0')}-${String(today.getMonth()+1).padStart(2,'0')}-${today.getFullYear()}.xlsx`
+    const today=new Date(); a.download=`${custName}_${String(today.getDate()).padStart(2,'0')}-${String(today.getMonth()+1).padStart(2,'0')}-${today.getFullYear()}.xlsx`
     document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(()=>URL.revokeObjectURL(url),10000)
   }
 
@@ -1214,7 +1236,7 @@ function CustomerSheetView() {
   const csDateGroups=useMemo(()=>{
     const map=new Map<string,CustSheetRow[]>()
     activeRows.forEach(r=>{ const d=r.date||''; if(!map.has(d)) map.set(d,[]); map.get(d)!.push(r) })
-    return Array.from(map.entries()).sort(([a],[b])=>a.localeCompare(b))
+    return Array.from(map.entries()).sort(([a],[b])=>b.localeCompare(a))
   },[activeRows])
   const rowCountMap=useMemo(()=>{ const m=new Map<string,number>(); allRows.forEach(r=>m.set(r.customer_name,(m.get(r.customer_name)||0)+1)); return m },[allRows])
   const inp='w-full rounded border px-2.5 py-1.5 text-xs outline-none focus:border-[#3ECF8E]'
@@ -1320,7 +1342,7 @@ function CustomerSheetView() {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-white">
+    <div className="flex-1 flex flex-col overflow-hidden bg-white" style={{minWidth:0}}>
       {toast&&<div className={`fixed top-4 right-4 z-[100] px-4 py-2.5 rounded-lg shadow-lg text-sm font-medium text-white ${toast.type==='success'?'bg-[#3ECF8E]':'bg-red-500'}`}>{toast.msg}</div>}
 
       {/* Delete confirm dialog */}
@@ -1337,6 +1359,23 @@ function CustomerSheetView() {
           </div>
         </>
       )}
+
+      {/* Customer tabs */}
+      <div style={{display:'flex',overflowX:'auto',borderBottom:'1px solid #e5e7eb',background:'#f9f9f9',flexShrink:0}}>
+        {customers.length===0&&!loading&&(
+          <span className="text-xs text-[#9ca3af] px-3 py-2">No customers yet.</span>
+        )}
+        {customers.map(c=>{
+          const isActive=activeCustomer===c.customer_name
+          return (
+            <button key={c.customer_name} onClick={()=>setActiveCustomer(c.customer_name)}
+              style={{padding:'8px 14px',fontSize:12,fontWeight:isActive?'bold':'normal',background:isActive?'#ffffff':'transparent',borderBottom:isActive?'2px solid #3ECF8E':'2px solid transparent',borderTop:'none',borderLeft:'none',borderRight:'1px solid #e5e7eb',cursor:'pointer',whiteSpace:'nowrap',color:isActive?'#000':'#6b7280',flexShrink:0}}
+            >
+              {c.customer_name} ({rowCountMap.get(c.customer_name)||0})
+            </button>
+          )
+        })}
+      </div>
 
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[#e5e7eb] bg-white flex-shrink-0">
@@ -1356,7 +1395,7 @@ function CustomerSheetView() {
         {loading?(
           <div className="flex items-center justify-center h-32 text-sm text-[#6b7280]">Loading...</div>
         ):(
-          <table style={{width:CS_W+32,borderCollapse:'collapse',tableLayout:'fixed'}}>
+          <table style={{borderCollapse:'collapse',tableLayout:'auto',minWidth:'100%'}}>
             <tbody>
               {csDateGroups.length===0?(
                 <tr><td colSpan={17} style={{textAlign:'center',padding:'32px',color:'#9ca3af'}}>No data for {activeCustomer||'this customer'}</td></tr>
@@ -1373,7 +1412,7 @@ function CustomerSheetView() {
                     </tr>
                     <tr>
                       <th style={{...CS_HS,width:CS_CW.due_date}}>DUE DATE</th>
-                      <th style={{...CS_HS,width:CS_CW.customer_name}}>CM NAME</th>
+                      <th style={{...CS_HS,width:CS_CW.customer_name}}>CUSTOMER NAME</th>
                       <th style={{...CS_HS,width:CS_CW.card}}>CARD</th>
                       <th style={{...CS_HS,width:CS_CW.card_number}}>CARD NO</th>
                       <th style={{...CS_HS,width:CS_CW.pin}}>PIN</th>
@@ -1388,36 +1427,27 @@ function CustomerSheetView() {
                       <th style={{...CS_HS,width:CS_CW.swap_name}}>SWAP NAME</th>
                       <th style={{...CS_HS,width:CS_CW.paid_date}}>PAID DATE</th>
                       <th style={{...CS_HS,width:CS_CW.card_network}}>VISA/MASTERCARD</th>
-                      <th style={{...CS_HS,width:32,background:'#e8f5e9'}}></th>
                     </tr>
                     {drows.map((r,i)=>{
                       const rowBg=i%2===1?'#F0FFF0':'#ffffff'
                       return (
                         <tr key={r.id} className="group" style={{background:rowBg}}>
                           <EC rowId={r.id} field="due_date"       value={r.due_date}       type="date"   align="center" width={CS_CW.due_date}       rowBg={rowBg}/>
-                          <EC rowId={r.id} field="customer_name"  value={r.customer_name}  type="text"   align="left"   width={CS_CW.customer_name}  rowBg={rowBg}/>
+                          <EC rowId={r.id} field="customer_name"  value={r.customer_name}  type="text"   align="center" width={CS_CW.customer_name}  rowBg={rowBg}/>
                           <EC rowId={r.id} field="card"           value={r.card}           type="text"   align="center" width={CS_CW.card}           rowBg={rowBg}/>
-                          <EC rowId={r.id} field="card_number"    value={r.card_number}    type="text"   align="center" width={CS_CW.card_number}    rowBg={rowBg}/>
+                          <EC rowId={r.id} field="card_number"    value={r.card_number ? String(r.card_number).slice(-4) : null} type="text" align="center" width={CS_CW.card_number} rowBg={rowBg}/>
                           <EC rowId={r.id} field="pin"            value={r.pin}            type="text"   align="center" width={CS_CW.pin}            rowBg={rowBg}/>
                           <EC rowId={r.id} field="cvv_expiry"     value={r.cvv_expiry}     type="text"   align="center" width={CS_CW.cvv_expiry}     rowBg={rowBg}/>
-                          <EC rowId={r.id} field="total_amount"   value={r.total_amount}   type="number" align="right"  width={CS_CW.total_amount}   rowBg={rowBg}/>
-                          <EC rowId={r.id} field="paid_amount"    value={r.paid_amount}    type="number" align="right"  width={CS_CW.paid_amount}    rowBg={rowBg}/>
-                          <EC rowId={r.id} field="swap_amount"    value={r.swap_amount}    type="number" align="right"  width={CS_CW.swap_amount}    rowBg={rowBg}/>
-                          <EC rowId={r.id} field="commission"     value={r.commission}     type="number" align="right"  width={CS_CW.commission}     rowBg={rowBg} color="#2563eb"/>
-                          <EC rowId={r.id} field="paid_remaining" value={r.paid_remaining} type="number" align="right"  width={CS_CW.paid_remaining} rowBg={rowBg}/>
-                          <EC rowId={r.id} field="swap_pending"   value={r.swap_pending}   type="number" align="right"  width={CS_CW.swap_pending}   rowBg={rowBg}/>
-                          <EC rowId={r.id} field="account_name"   value={r.account_name}   type="text"   align="left"   width={CS_CW.account_name}   rowBg={rowBg}/>
-                          <EC rowId={r.id} field="swap_name"      value={r.swap_name}      type="text"   align="left"   width={CS_CW.swap_name}      rowBg={rowBg}/>
+                          <EC rowId={r.id} field="total_amount"   value={r.total_amount}   type="number" align="center" width={CS_CW.total_amount}   rowBg={rowBg}/>
+                          <EC rowId={r.id} field="paid_amount"    value={r.paid_amount}    type="number" align="center" width={CS_CW.paid_amount}    rowBg={rowBg}/>
+                          <EC rowId={r.id} field="swap_amount"    value={r.swap_amount}    type="number" align="center" width={CS_CW.swap_amount}    rowBg={rowBg}/>
+                          <EC rowId={r.id} field="commission"     value={r.commission}     type="number" align="center" width={CS_CW.commission}     rowBg={rowBg} color="#2563eb"/>
+                          <EC rowId={r.id} field="paid_remaining" value={r.paid_remaining} type="number" align="center" width={CS_CW.paid_remaining} rowBg={rowBg}/>
+                          <EC rowId={r.id} field="swap_pending"   value={r.swap_pending}   type="number" align="center" width={CS_CW.swap_pending}   rowBg={rowBg}/>
+                          <EC rowId={r.id} field="account_name"   value={r.account_name}   type="text"   align="center" width={CS_CW.account_name}   rowBg={rowBg}/>
+                          <EC rowId={r.id} field="swap_name"      value={r.swap_name}      type="text"   align="center" width={CS_CW.swap_name}      rowBg={rowBg}/>
                           <EC rowId={r.id} field="paid_date"      value={r.paid_date}      type="date"   align="center" width={CS_CW.paid_date}      rowBg={rowBg}/>
                           <EC rowId={r.id} field="card_network"   value={r.card_network}   type="text"   align="center" width={CS_CW.card_network}   rowBg={rowBg}/>
-                          <td style={{...CS_CS,width:32,padding:'2px 4px',textAlign:'center',background:rowBg}}>
-                            <button
-                              onClick={()=>setDeleteConfirm(r.id)}
-                              className="opacity-0 group-hover:opacity-100 transition-opacity"
-                              title="Delete row"
-                              style={{color:'#ef4444',background:'none',border:'none',cursor:'pointer',fontSize:14,lineHeight:1,padding:'2px'}}
-                            >✕</button>
-                          </td>
                         </tr>
                       )
                     })}
@@ -1429,22 +1459,6 @@ function CustomerSheetView() {
         )}
       </div>
 
-      {/* Customer tabs */}
-      <div style={{display:'flex',flexWrap:'wrap',borderTop:'1px solid #e5e7eb',background:'#f9f9f9',gap:'2px',padding:'4px'}}>
-        {customers.length===0&&!loading&&(
-          <span className="text-xs text-[#9ca3af] px-3 py-2">No customers yet. Submit Daily Register entries to populate.</span>
-        )}
-        {customers.map(c=>{
-          const isActive=activeCustomer===c.customer_name
-          return (
-            <button key={c.customer_name} onClick={()=>setActiveCustomer(c.customer_name)}
-              style={{padding:'8px 14px',fontSize:12,fontWeight:isActive?'bold':'normal',background:isActive?'#ffffff':'transparent',borderBottom:isActive?'2px solid #3ECF8E':'2px solid transparent',borderTop:'none',borderLeft:'none',borderRight:'none',cursor:'pointer',whiteSpace:'nowrap',color:isActive?'#000':'#6b7280',flexShrink:0}}
-            >
-              {c.customer_name} ({rowCountMap.get(c.customer_name)||0})
-            </button>
-          )
-        })}
-      </div>
 
       {/* Insert panel */}
       {showInsert&&(
@@ -1547,6 +1561,7 @@ function CustomerSheetView() {
 interface CCRow {
   id: string
   transaction_id: string | null
+  sr_no: number | null
   machine_id: string | null
   tid: string
   machine_name: string
@@ -1591,7 +1606,7 @@ function CCSheetView() {
 
   const fetchRows = useCallback(async () => {
     setLoading(true)
-    const {data} = await supabase.from('cc_sheet').select('*').order('date',{ascending:true}).order('machine_name',{ascending:true})
+    const {data} = await supabase.from('cc_sheet').select('*').order('date',{ascending:false}).order('machine_name',{ascending:true})
     setRows((data as CCRow[])||[])
     setLoading(false)
   },[])
@@ -1665,8 +1680,8 @@ function CCSheetView() {
     const wb=new ExcelJS.Workbook()
     wb.creator='SwipeSaaS'; wb.created=new Date()
     const border={top:{style:'thin' as const,color:{argb:'FF000000'}},bottom:{style:'thin' as const,color:{argb:'FF000000'}},left:{style:'thin' as const,color:{argb:'FF000000'}},right:{style:'thin' as const,color:{argb:'FF000000'}}}
-    const colWidths=[{width:16},{width:20},{width:14},{width:15},{width:22},{width:18},{width:18},{width:10},{width:22},{width:12}]
-    const headers=['BANK CODE NO','SWIPE MACHINE NAME','DATE','SWIPE AMOUNT','CUSTOMER AMOUNT','OUR COMMISSION','BANK COMMISSION','STATUS','CUSTOMER NAME','CODE']
+    const colWidths=[{width:8},{width:16},{width:20},{width:14},{width:15},{width:22},{width:18},{width:18},{width:10},{width:22},{width:12}]
+    const headers=['SR NO','BANK CODE NO','SWIPE MACHINE NAME','DATE','SWIPE AMOUNT','CUSTOMER AMOUNT','OUR COMMISSION','BANK COMMISSION','STATUS','CUSTOMER NAME','CODE']
     allMachines.forEach(machine=>{
       const ws=wb.addWorksheet(machine.machine_name.slice(0,31))
       ws.columns=colWidths
@@ -1681,18 +1696,18 @@ function CCSheetView() {
       // Data rows
       const mrows=rows.filter(r=>r.machine_name===machine.machine_name)
       if(mrows.length===0){
-        const er=ws.addRow(['No data','','','','','','','','',''])
+        const er=ws.addRow(['','No data','','','','','','','','',''])
         er.eachCell({includeEmpty:true},c=>{ c.font={name:'Calibri',size:11}; c.border=border; c.alignment={horizontal:'center',vertical:'middle'} })
       } else {
         mrows.forEach(r=>{
           const d=new Date(r.date)
           const dateStr=`${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`
-          const dr=ws.addRow([r.tid||'',r.machine_name||'',dateStr,Number(r.swipe_amount)||0,Number(r.customer_amount)||0,Number(r.our_commission)||0,Number(r.bank_commission)||0,r.status||'',r.customer_name||'',r.agent_code||''])
+          const dr=ws.addRow([r.sr_no||'',r.tid||'',r.machine_name||'',dateStr,Number(r.swipe_amount)||0,Number(r.customer_amount)||0,Number(r.our_commission)||0,Number(r.bank_commission)||0,r.status||'',r.customer_name||'',r.agent_code||''])
           dr.eachCell({includeEmpty:true},(c,col)=>{
             c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFFFFF'}}
             c.font={name:'Calibri',size:11}
             c.border=border
-            if(col>=4&&col<=7){ c.numFmt='#,##0.00'; c.alignment={horizontal:'right',vertical:'middle'} }
+            if(col>=5&&col<=8){ c.numFmt='#,##0.00'; c.alignment={horizontal:'right',vertical:'middle'} }
             else { c.alignment={horizontal:'center',vertical:'middle'} }
           })
         })
@@ -1709,7 +1724,7 @@ function CCSheetView() {
 
   const HS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:12,fontFamily:'Calibri,Arial,sans-serif',background:'#FFFF00',color:'#000',fontWeight:'bold',textAlign:'center',whiteSpace:'nowrap'}
   const CS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:12,fontFamily:'Calibri,Arial,sans-serif',background:'#ffffff',color:'#000',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'middle',textAlign:'center'}
-  const CW={tid:120,machine_name:150,date:100,swipe_amount:120,customer_amount:150,our_commission:130,bank_commission:130,status:90,customer_name:160,agent_code:80}
+  const CW={sr_no:60,tid:120,machine_name:150,date:100,swipe_amount:120,customer_amount:150,our_commission:130,bank_commission:130,status:90,customer_name:160,agent_code:80}
   const W=Object.values(CW).reduce((s,v)=>s+v,0)
   const activeRows = React.useMemo(()=>rows.filter(r=>r.machine_name===activeMachine),[rows,activeMachine])
   const ccDateGroups = React.useMemo(()=>{
@@ -1748,17 +1763,18 @@ function CCSheetView() {
           <table style={{width:W,borderCollapse:'collapse',tableLayout:'fixed'}}>
             <tbody>
               {ccDateGroups.length===0?(
-                <tr><td colSpan={10} style={{textAlign:'center',padding:'32px',color:'#9ca3af'}}>No data for {activeMachine||'this machine'}</td></tr>
+                <tr><td colSpan={11} style={{textAlign:'center',padding:'32px',color:'#9ca3af'}}>No data for {activeMachine||'this machine'}</td></tr>
               ):ccDateGroups.map(([date,drows],gi)=>{
-                const fmtD2=(d:string)=>{ if(!d) return ''; const [y,m,dd]=d.split('-'); return `${parseInt(dd)}/${parseInt(m)}/${y.slice(2)}` }
+                const fmtD2=(d:string)=>{ if(!d)return ''; const [y,m,dd]=d.split('-'); return `${parseInt(dd)}/${parseInt(m)}/${y.slice(2)}` }
                 return (
                   <React.Fragment key={date}>
-                    {gi>0&&<tr><td colSpan={10} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
-                    {gi>0&&<tr><td colSpan={10} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
+                    {gi>0&&<tr><td colSpan={11} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
+                    {gi>0&&<tr><td colSpan={11} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
                     <tr>
-                      <td colSpan={10} style={{...HS,textAlign:'center',fontSize:13}}>DATE {fmtD2(date)}</td>
+                      <td colSpan={11} style={{...HS,textAlign:'center',fontSize:13}}>DATE {fmtD2(date)}</td>
                     </tr>
                     <tr>
+                      <th style={{...HS,width:CW.sr_no}}>SR NO</th>
                       <th style={{...HS,width:CW.tid}}>BANK CODE NO / TID</th>
                       <th style={{...HS,width:CW.machine_name}}>SWIPE MACHINE NAME</th>
                       <th style={{...HS,width:CW.date}}>DATE</th>
@@ -1774,6 +1790,7 @@ function CCSheetView() {
                       const d=new Date(r.date); const dd=String(d.getDate()).padStart(2,'0'); const mm=String(d.getMonth()+1).padStart(2,'0'); const yy=String(d.getFullYear()).slice(2)
                       return (
                         <tr key={r.id}>
+                          <td style={{...CS,width:CW.sr_no,textAlign:'center',color:'#6b7280'}}>{r.sr_no||''}</td>
                           <td style={{...CS,width:CW.tid,textAlign:'center'}}>{r.tid}</td>
                           <td style={{...CS,width:CW.machine_name}}>{r.machine_name}</td>
                           <td style={{...CS,width:CW.date,textAlign:'center'}}>{`${parseInt(dd)}/${parseInt(mm)}/${yy}`}</td>
@@ -2164,7 +2181,7 @@ export default function SheetsPage() {
   const dateGroups = useMemo(()=>{
     const map = new Map<string,TxRow[]>()
     pageRows.forEach(r=>{ const d=r.date; if(!map.has(d)) map.set(d,[]); map.get(d)!.push(r) })
-    return Array.from(map.entries()).sort(([a],[b])=>a.localeCompare(b))
+    return Array.from(map.entries()).sort(([a],[b])=>b.localeCompare(a))
   },[pageRows])
 
   // Summary
@@ -2540,7 +2557,7 @@ export default function SheetsPage() {
     return (
       <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
         <LeftPanel/>
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <TabBar/>
           <CustomerSheetView/>
         </div>

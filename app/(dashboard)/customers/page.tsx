@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Search, Plus, X, Edit, RefreshCw, ChevronDown, ChevronRight, CreditCard, Building2, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabase/admin'
@@ -46,7 +46,7 @@ function blankCard(): Omit<Card, 'id' | 'customer_id'> & { _key: string; _expand
   return { _key: Math.random().toString(36).slice(2), _expanded: true, card_nickname: '', bank_name: '', card_number: '', last4: '', pin: '', cvv: '', expiry: '', due_date: '', card_type: 'Credit' }
 }
 function blankAcct(): Omit<CustomerBankAccount, 'id' | 'customer_id'> & { _key: string } {
-  return { _key: Math.random().toString(36).slice(2), bank_name: '', account_number: '', ifsc_code: '', account_type: 'Savings' }
+  return { _key: Math.random().toString(36).slice(2), bank_name: '', account_number: '', ifsc_code: '', branch: '', account_type: 'Savings' }
 }
 
 type DraftCard = ReturnType<typeof blankCard> & { id?: string }
@@ -148,7 +148,7 @@ function CardBlock({
 // ── Account row ───────────────────────────────────────────────────────────────
 function AcctRow({ acct, onChange, onRemove }: { acct: DraftAcct; onChange: (u: Partial<DraftAcct>) => void; onRemove: () => void }) {
   return (
-    <div className="grid grid-cols-5 gap-2 items-end">
+    <div className="grid grid-cols-6 gap-2 items-end">
       <div>
         <label className={labelCls}>Bank</label>
         <input className={inputCls} style={{ borderColor: '#e5e7eb' }} placeholder="HDFC" value={acct.bank_name} onChange={e => onChange({ bank_name: e.target.value })} />
@@ -160,6 +160,10 @@ function AcctRow({ acct, onChange, onRemove }: { acct: DraftAcct; onChange: (u: 
       <div>
         <label className={labelCls}>IFSC</label>
         <input className={inputCls} style={{ borderColor: '#e5e7eb' }} placeholder="HDFC0001234" value={acct.ifsc_code} onChange={e => onChange({ ifsc_code: e.target.value })} />
+      </div>
+      <div>
+        <label className={labelCls}>Branch</label>
+        <input className={inputCls} style={{ borderColor: '#e5e7eb' }} placeholder="Main Branch" value={acct.branch || ''} onChange={e => onChange({ branch: e.target.value })} />
       </div>
       <div>
         <label className={labelCls}>Type</label>
@@ -186,7 +190,15 @@ function CustomerPanel({
   onDeleteRequest?: (c: Customer) => void
 }) {
   const isEdit = !!customer
-  const [basic, setBasic] = useState({ name: customer?.name || '', phone: customer?.phone || '', charge: String(customer?.default_charge_pct || '2.2') })
+  const [basic, setBasic] = useState({
+    name: customer?.name || '',
+    phone: customer?.phone || '',
+    charge: String(customer?.default_charge_pct || '2.2'),
+    consignee_name: customer?.consignee_name || '',
+    consignee_address: customer?.consignee_address || '',
+    buyer_name: customer?.buyer_name || '',
+    buyer_address: customer?.buyer_address || '',
+  })
   const [cards, setCards] = useState<DraftCard[]>([])
   const [accts, setAccts] = useState<DraftAcct[]>([])
   const [saving, setSaving] = useState(false)
@@ -225,16 +237,22 @@ function CustomerPanel({
     try {
       let customerId = customer?.id
 
+      const customerPayload = {
+        name: basic.name,
+        phone: basic.phone,
+        default_charge_pct: parseFloat(basic.charge) || 2.2,
+        consignee_name: basic.consignee_name.trim() || null,
+        consignee_address: basic.consignee_address.trim() || null,
+        buyer_name: basic.buyer_name.trim() || null,
+        buyer_address: basic.buyer_address.trim() || null,
+      }
+
       if (isEdit && customer) {
-        const { error: ue } = await supabaseAdmin.from('customers').update({
-          name: basic.name, phone: basic.phone,
-          default_charge_pct: parseFloat(basic.charge) || 2.2,
-        }).eq('id', customer.id)
+        const { error: ue } = await supabaseAdmin.from('customers').update(customerPayload).eq('id', customer.id)
         if (ue) throw new Error('Update customer failed: ' + ue.message)
       } else {
         const { data: cd, error: ce } = await supabaseAdmin.from('customers').insert({
-          name: basic.name, phone: basic.phone,
-          default_charge_pct: parseFloat(basic.charge) || 2.2,
+          ...customerPayload,
           outstanding_balance: 0,
         }).select('id').single()
         if (ce || !cd) throw new Error('Create customer failed: ' + (ce?.message || 'unknown'))
@@ -280,6 +298,7 @@ function CustomerPanel({
           bank_name: a.bank_name || '',
           account_number: a.account_number || '',
           ifsc_code: a.ifsc_code || '',
+          branch: a.branch || '',
           account_type: a.account_type || 'Savings',
         })
         if (ae) throw new Error('Save bank account failed: ' + ae.message)
@@ -359,6 +378,32 @@ function CustomerPanel({
                   />
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Invoice Details */}
+          <div>
+            <div className="text-[10px] font-bold text-[#9ca3af] uppercase tracking-widest mb-3 pb-1 border-b border-[#f3f4f6]">Invoice Details</div>
+            <div className="mb-3">
+              <label className={labelCls}>Consignee / Buyer Name</label>
+              <input
+                className="w-full rounded border px-2.5 py-1.5 text-xs outline-none focus:border-[#3ECF8E] transition-colors bg-white"
+                style={{ borderColor: '#e5e7eb' }}
+                placeholder="Leave blank to use customer name"
+                value={basic.consignee_name}
+                onChange={e => setBasic(p => ({ ...p, consignee_name: e.target.value, buyer_name: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Address (Ship to &amp; Bill to)</label>
+              <textarea
+                className="w-full rounded border px-2.5 py-1.5 text-xs outline-none focus:border-[#3ECF8E] transition-colors bg-white resize-none"
+                style={{ borderColor: '#e5e7eb' }}
+                rows={3}
+                placeholder="Street, Area, City, State"
+                value={basic.consignee_address}
+                onChange={e => setBasic(p => ({ ...p, consignee_address: e.target.value, buyer_address: e.target.value }))}
+              />
             </div>
           </div>
 
@@ -780,8 +825,8 @@ export default function CustomersPage() {
               {filtered.length === 0 ? (
                 <tr><td colSpan={7} className="px-4 py-8 text-center text-sm text-[#6b7280]">No customers yet</td></tr>
               ) : filtered.map(c => (
-                <>
-                  <tr key={c.id} className="border-b border-[#e5e7eb] hover:bg-gray-50 cursor-pointer" onClick={() => toggleExpand(c)}>
+                <React.Fragment key={c.id}>
+                  <tr className="border-b border-[#e5e7eb] hover:bg-gray-50 cursor-pointer" onClick={() => toggleExpand(c)}>
                     <td className="px-4 py-2.5 font-medium text-[#1a1a1a]">{c.name}</td>
                     <td className="px-4 py-2.5 text-[#6b7280]">{c.phone}</td>
                     <td className="px-4 py-2.5">{c.default_charge_pct}%</td>
@@ -818,7 +863,7 @@ export default function CustomersPage() {
                   {expanded === c.id && (
                     <ExpandedRow key={c.id + '-exp'} customer={c} txns={expandedTxns[c.id] || []} />
                   )}
-                </>
+                </React.Fragment>
               ))}
             </tbody>
           </table>
