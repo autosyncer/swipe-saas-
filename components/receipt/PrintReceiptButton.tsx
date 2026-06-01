@@ -15,19 +15,25 @@ interface PrintReceiptButtonProps {
 
 export default function PrintReceiptButton({ transaction, relatedTransactions = [] }: PrintReceiptButtonProps) {
   const [open, setOpen] = useState(false)
-  const receiptData = transactionToReceiptProps(transaction, relatedTransactions)
+  const [receiptData, setReceiptData] = useState<Awaited<ReturnType<typeof transactionToReceiptProps>> | null>(null)
+
+  async function handleOpen() {
+    const data = await transactionToReceiptProps(transaction, relatedTransactions)
+    setReceiptData(data)
+    setOpen(true)
+  }
 
   return (
     <>
       <button
         className="receipt-btn-print"
         style={{ fontSize: 11, padding: '3px 8px' }}
-        onClick={() => setOpen(true)}
+        onClick={handleOpen}
       >
         🖨 Receipt
       </button>
 
-      {open && (
+      {open && receiptData && (
         <PaymentReceiptModal
           receiptData={receiptData}
           onClose={() => setOpen(false)}

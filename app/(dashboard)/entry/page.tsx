@@ -1337,12 +1337,12 @@ function EntryPageInner() {
               </div>
               {generatedInvoice.items.map((item, i) => (
                 <div key={i} style={{ fontSize: '12px', color: '#6b7280' }}>
-                  {item.name}: {item.qty} {item.unit} × ₹{Number(item.price).toLocaleString('en-IN')} = ₹{Number(item.subtotal).toLocaleString('en-IN')}
+                  {(item as Record<string,unknown>).name as string}: {item.qty} {item.unit} x {Number((item as Record<string,unknown>).price).toLocaleString('en-IN')} = {Number(item.subtotal).toLocaleString('en-IN')}
                 </div>
               ))}
-              {Number(generatedInvoice.subtotal) > Number(generatedInvoice.total_amount) && (
+              {Number((generatedInvoice as Record<string,unknown>).subtotal) > Number(generatedInvoice.total_amount) && (
                 <div style={{ fontSize: '12px', color: '#dc2626' }}>
-                  Discount: −₹{(Number(generatedInvoice.subtotal) - Number(generatedInvoice.total_amount)).toLocaleString('en-IN')}
+                  Discount: -{(Number((generatedInvoice as Record<string,unknown>).subtotal) - Number(generatedInvoice.total_amount)).toLocaleString('en-IN')}
                 </div>
               )}
               <div style={{ fontSize: '13px', fontWeight: 600, color: '#166534', marginTop: '4px' }}>

@@ -192,7 +192,8 @@ export default function AcSheetView() {
       .select('date')
       .order('date', { ascending: false })
 
-    const uniqueDates = [...new Set((dateRows || []).map((r: { date: string }) => r.date))]
+    const allDates = (dateRows || []).map((r: { date: string }) => r.date)
+    const uniqueDates = allDates.filter((d, i) => allDates.indexOf(d) === i)
 
     // Always include today even if no rows yet
     if (!uniqueDates.includes(today)) uniqueDates.unshift(today)

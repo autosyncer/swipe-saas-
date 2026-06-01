@@ -14,10 +14,10 @@ interface Print4UpButtonProps {
 
 export default function Print4UpButton({ transactions }: Print4UpButtonProps) {
   const last4 = transactions.slice(-4)
-  const receiptProps = last4.map((t) => transactionToReceiptProps(t))
 
   const handlePrint = async () => {
     const { default: A4 } = await import('./PaymentReceiptA4')
+    const receiptProps = await Promise.all(last4.map((t) => transactionToReceiptProps(t)))
     const win = window.open('', '_blank', 'width=900,height=700')
     if (!win) return
 
