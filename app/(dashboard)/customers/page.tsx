@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { Search, Plus, X, Edit, RefreshCw, ChevronDown, ChevronRight, CreditCard, Building2, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { supabaseAdmin } from '@/lib/supabase/admin'
+import { supabaseAdmin } from '@/lib/supabase/admin-client'
 import { Customer, Transaction, Card, CustomerBankAccount } from '@/types/database'
 import { logAction } from '@/lib/audit-log'
 
