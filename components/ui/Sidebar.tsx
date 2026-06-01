@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
   Home, LayoutGrid, Terminal, Users, CreditCard,
-  FileText, Bell, AlertTriangle, BarChart2, List, Grid, Settings, Landmark, Package, Receipt, Workflow
+  FileText, Bell, AlertTriangle, BarChart2, List, Grid, Settings, Landmark, Package, Receipt
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import { supabase } from '@/lib/supabase'
@@ -15,7 +15,6 @@ const navGroups = [
     { icon: Home, label: 'Dashboard', href: '/dashboard', superOnly: false },
     { icon: LayoutGrid, label: 'Sheet Editor', href: '/sheets', superOnly: false },
     { icon: Terminal, label: 'New Entry', href: '/entry', superOnly: false },
-    { icon: Workflow, label: 'Field Mapping', href: '/mapping', superOnly: false },
   ],
   [
     { icon: Users, label: 'Customers', href: '/customers', superOnly: false },
