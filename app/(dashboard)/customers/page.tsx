@@ -241,6 +241,7 @@ function CustomerPanel({
         name: basic.name,
         phone: basic.phone,
         default_charge_pct: parseFloat(basic.charge) || 2.2,
+        address: basic.consignee_address.trim() || null,
         consignee_name: basic.consignee_name.trim() || null,
         consignee_address: basic.consignee_address.trim() || null,
         buyer_name: basic.buyer_name.trim() || null,

@@ -463,7 +463,13 @@ export default function InvoicesPage() {
                 totalAmount={Number(detailInvoice.total_amount)}
                 remarks={detailInvoice.notes}
                 paidBy={detailInvoice.paid_by ?? ''}
-                storeSettings={storeSettings}
+                storeSettings={{
+                  ...storeSettings,
+                  // Override bank details from the transaction's account if available
+                  bankName: (detailInvoice as unknown as Record<string,string>).store_bank_name || storeSettings.bankName,
+                  accNo:    (detailInvoice as unknown as Record<string,string>).store_acc_no    || storeSettings.accNo,
+                  ifsc:     (detailInvoice as unknown as Record<string,string>).store_ifsc      || storeSettings.ifsc,
+                }}
               />
             </div>
           </div>

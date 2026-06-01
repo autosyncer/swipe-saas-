@@ -14,34 +14,62 @@ export async function transactionToReceiptProps(
   let accNo: string | undefined
   let bankCCName: string = txn.bank_card || ''
 
-  // Fetch customer phone + bank account in one go
-  const { data: customer, error: custErr } = await supabase
+  // Step 1: Fetch customer
+  const { data: customer } = await supabase
     .from('customers')
     .select('id, phone')
     .ilike('name', txn.customer_name)
     .maybeSingle()
 
-  console.log('[receipt] customer lookup:', txn.customer_name, '→', customer, custErr)
-
   if (customer) {
     if (customer.phone) mobileNo = customer.phone
 
-    const { data: bankAcc, error: bankErr } = await supabase
+    // Step 2: Try customer bank accounts first
+    const { data: bankAcc } = await supabase
       .from('customer_bank_accounts')
       .select('*')
       .eq('customer_id', customer.id)
       .limit(1)
       .maybeSingle()
 
-    console.log('[receipt] bank account:', bankAcc, bankErr)
-
     if (bankAcc) {
       const acc = bankAcc as Record<string, unknown>
       ifscCode = (acc.ifsc_code as string) || undefined
-      branch = (acc.branch as string) || undefined
-      accNo = (acc.account_number as string) || undefined
-      // Use saved bank name if transaction bank_card is empty
+      branch   = (acc.branch as string) || undefined
+      accNo    = (acc.account_number as string) || undefined
       if (!bankCCName) bankCCName = (acc.bank_name as string) || ''
+    }
+
+    // Step 3: If bank account missing, try card details from cards table
+    if (!accNo && txn.bank_card) {
+      const { data: card } = await supabase
+        .from('cards')
+        .select('card_number, last4, bank_name, card_nickname')
+        .eq('customer_id', customer.id)
+        .ilike('bank_name', `%${txn.bank_card}%`)
+        .limit(1)
+        .maybeSingle()
+
+      if (card) {
+        const c = card as Record<string, unknown>
+        accNo      = (c.card_number as string) || (c.last4 ? `XXXX-XXXX-XXXX-${c.last4}` : undefined)
+        if (!bankCCName) bankCCName = (c.bank_name as string) || txn.bank_card || ''
+      }
+    }
+
+    // Step 4: If still nothing, try any card for this customer
+    if (!accNo) {
+      const { data: anyCard } = await supabase
+        .from('cards')
+        .select('card_number, last4, bank_name')
+        .eq('customer_id', customer.id)
+        .limit(1)
+        .maybeSingle()
+
+      if (anyCard) {
+        const c = anyCard as Record<string, unknown>
+        accNo = (c.card_number as string) || (c.last4 ? `XXXX-XXXX-XXXX-${c.last4}` : undefined)
+      }
     }
   }
 

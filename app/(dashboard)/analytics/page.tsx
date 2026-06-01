@@ -960,7 +960,7 @@ export default function AnalyticsPage() {
         <div className="bg-white rounded-xl border border-[#e5e7eb] p-4 mb-6" style={{ boxShadow: '0 1px 4px rgba(0,0,0,0.07)' }}>
           <div className="font-semibold text-sm text-[#111827] mb-3">Status Distribution</div>
           <div className="flex items-center gap-6">
-            <ResponsiveContainer width={200} height={180}>
+            <ResponsiveContainer width="100%" height={180}>
               <PieChart>
                 <Pie data={statusBreakdown} dataKey="amount" nameKey="label" cx="50%" cy="50%" outerRadius={80} innerRadius={45}>
                   {statusBreakdown.map((s, i) => <Cell key={i} fill={s.color} />)}

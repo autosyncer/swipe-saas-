@@ -339,22 +339,18 @@ export default function InvoiceDocument({
             {computedRows.map((row, i) => (
               <tr key={i}>
                 <td style={{ ...cell({ textAlign: 'center' }), borderRight: B }}>{i + 1}</td>
-                <td style={{ ...cell({ fontWeight: 'bold' }), borderRight: B }}>
-                  <E value={row.name} onChange={v => updateRow(i, 'name', v)}
-                    bold placeholder="Item description" style={{ textTransform: 'uppercase' }} />
+                <td style={{ ...cell({ fontWeight: 'bold', textTransform: 'uppercase' }), borderRight: B }}>
+                  {row.name}
                 </td>
                 <td style={{ ...cell({ textAlign: 'center' }), borderRight: B }}>
-                  <E value={row.qty} onChange={v => updateRow(i, 'qty', v)}
-                    placeholder="0" style={{ textAlign: 'center' }} />
-                  <E value={row.per} onChange={v => updateRow(i, 'per', v)}
-                    placeholder="kg" style={{ textAlign: 'center' }} />
+                  <div style={{ fontFamily: F, fontSize: 11 }}>{row.qty}</div>
+                  <div style={{ fontFamily: F, fontSize: 11 }}>{row.per}</div>
                 </td>
                 <td style={{ ...cell({ textAlign: 'center' }), borderRight: B }}>
-                  <E value={row.rate} onChange={v => updateRow(i, 'rate', v)}
-                    placeholder="0.00" style={{ textAlign: 'center' }} />
+                  <div style={{ fontFamily: F, fontSize: 11 }}>{row.rate}</div>
                 </td>
                 <td style={{ ...cell({ textAlign: 'center' }), borderRight: B }}>
-                  <E value={row.per} onChange={v => updateRow(i, 'per', v)} placeholder="kg" style={{ textAlign: 'center' }} />
+                  <div style={{ fontFamily: F, fontSize: 11 }}>{row.per}</div>
                 </td>
                 <td style={{ ...cell({ textAlign: 'center', fontWeight: 'bold' }), borderRight: B }}>
                   {row.amount > 0 ? row.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : ''}
@@ -454,8 +450,7 @@ export default function InvoiceDocument({
             <tr>
               <td style={{ ...cellTop({ width: '50%' }), borderRight: B }}>
                 <div style={{ fontStyle: 'italic', marginBottom: 3 }}>Declaration</div>
-                <E value={declaration} onChange={setDeclaration} multiline
-                  style={{ fontSize: 10, lineHeight: 1.4 }} />
+                <div style={{ fontSize: 10, lineHeight: 1.4, fontFamily: F }}>{declaration}</div>
               </td>
               <td style={cellTop()}>
                 <div style={{ marginBottom: 4 }}>Company's Bank Details</div>
@@ -493,7 +488,7 @@ export default function InvoiceDocument({
 
         {/* Footer */}
         <div style={{ textAlign: 'center', padding: '4px 6px', fontSize: 10 }}>
-          <E value={jurisdiction} onChange={setJurisdiction} style={{ textAlign: 'center' }} />
+          <div style={{ textAlign: 'center', fontFamily: F, fontSize: 11 }}>{jurisdiction}</div>
         </div>
         <div style={{ textAlign: 'center', padding: '2px 0 4px', fontSize: 10, borderTop: B }}>
           This is a Computer Generated Invoice
