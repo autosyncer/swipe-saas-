@@ -158,7 +158,7 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
     totalAmount:'', paidAmount:'', accountNames:[] as string[],
     swapAmount:'', swapNames:[] as string[], difference:'', remarks:'PAID',
   })
-  const [commType, setCommType] = useState('Inclusive')
+  const [commType, setCommType] = useState<'Inclusive' | 'Exclusive' | 'Deferred'>('Inclusive')
   const [commPayMode, setCommPayMode] = useState<'UPI'|'Cash'|'Net Banking'>('UPI')
   const [commPayDetail, setCommPayDetail] = useState('')
   const [upiAccounts, setUpiAccounts] = useState<{id:string;display_name:string;upi_id:string}[]>([])
@@ -267,7 +267,7 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
       const {data}=await supabase.from('bank_account_master').select('commission_pct,commission_type,account_name').ilike('account_name',`%${firstAcct}%`).limit(1)
       if(data&&data.length>0&&Number(data[0].commission_pct)>0){
         setForm(f=>({...f,commPct:String(data[0].commission_pct)}))
-        if(data[0].commission_type) setCommType(data[0].commission_type as string)
+        if(data[0].commission_type) setCommType(data[0].commission_type as 'Inclusive' | 'Exclusive' | 'Deferred')
         setCommAutoSource(data[0].account_name as string)
       }
     } else {
@@ -472,7 +472,7 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
                 Comm Type
                 {commAutoSource&&<span className="ml-1 font-normal" style={{color:'#3ECF8E',fontSize:10}}>auto-filled</span>}
               </label>
-              <select className={`${inCls} bg-white`} style={{borderColor:'#e5e7eb'}} value={commType} onChange={e=>setCommType(e.target.value)}>
+              <select className={`${inCls} bg-white`} style={{borderColor:'#e5e7eb'}} value={commType} onChange={e=>setCommType(e.target.value as 'Inclusive' | 'Exclusive' | 'Deferred')}>
                 <option value="Inclusive">Inclusive</option>
                 <option value="Exclusive">Exclusive</option>
                 <option value="Deferred">Deferred</option>
@@ -510,7 +510,7 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
               {commPayMode === 'Net Banking' && netBankAccounts.length === 0 && (
                 <div className="text-[10px] text-[#9ca3af]">No bank accounts — add one in Commission Sheet → Net Banking tab</div>
               )}
-              {commPayMode === 'Cash' && commType !== 'Deferred' && (
+              {commPayMode === 'Cash' && (
                 <div className="text-[10px] text-[#166534] mt-1">Cash will be recorded in Chamunda Sheet automatically.</div>
               )}
             </div>
