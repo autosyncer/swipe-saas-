@@ -1,11 +1,97 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
-import { Search, Plus, X, Edit, RefreshCw, ChevronDown, ChevronRight, CreditCard, Building2, Trash2 } from 'lucide-react'
+import { Search, Plus, X, Edit, RefreshCw, ChevronDown, ChevronRight, CreditCard, Building2, Trash2, FileText, Upload, Eye, StickyNote } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabase/admin-client'
 import { Customer, Transaction, Card, CustomerBankAccount } from '@/types/database'
 import { logAction } from '@/lib/audit-log'
+
+// ── types ─────────────────────────────────────────────────────────────────────
+interface CustomerDocument {
+  id: string
+  customer_id: string
+  doc_type: 'aadhaar' | 'pan' | 'other'
+  file_name: string
+  file_url: string
+  storage_path: string
+  note: string | null
+  created_at: string
+}
+
+const DOC_LABELS: Record<string, string> = { aadhaar: 'Aadhaar Card', pan: 'PAN Card', other: 'Other' }
+
+// ── Document viewer modal ─────────────────────────────────────────────────────
+function DocViewer({ doc, onClose }: { doc: CustomerDocument; onClose: () => void }) {
+  const isPdf = doc.file_name.toLowerCase().endsWith('.pdf')
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/70 z-[70]" onClick={onClose} />
+      <div
+        className="fixed z-[80] flex flex-col bg-white rounded-xl overflow-hidden"
+        style={{ top: '5%', left: '50%', transform: 'translateX(-50%)', width: '90%', maxWidth: 860, height: '90vh', boxShadow: '0 25px 60px rgba(0,0,0,0.35)' }}
+      >
+        {/* header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-[#e5e7eb] flex-shrink-0" style={{ background: '#f9fafb' }}>
+          <div className="flex items-center gap-2">
+            <FileText size={15} color="#3ECF8E" />
+            <span className="text-sm font-semibold text-[#1a1a1a]">{DOC_LABELS[doc.doc_type] || doc.doc_type}</span>
+            <span className="text-xs text-[#6b7280]">— {doc.file_name}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              href={doc.file_url}
+              download={doc.file_name}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border hover:bg-white"
+              style={{ borderColor: '#e5e7eb', color: '#374151' }}
+            >
+              <Upload size={11} style={{ transform: 'rotate(180deg)' }} /> Download
+            </a>
+            <button onClick={onClose} className="p-1.5 rounded hover:bg-gray-100">
+              <X size={16} color="#6b7280" />
+            </button>
+          </div>
+        </div>
+        {/* content */}
+        <div className="flex-1 overflow-hidden bg-[#f3f4f6] flex items-center justify-center">
+          {isPdf ? (
+            <iframe src={doc.file_url} className="w-full h-full border-0" title={doc.file_name} />
+          ) : (
+            <img
+              src={doc.file_url}
+              alt={doc.file_name}
+              className="max-w-full max-h-full object-contain p-4"
+              style={{ userSelect: 'none' }}
+            />
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+const DOC_BUCKET = 'customer-docs'
+
+async function uploadCustomerDoc(customerId: string, docType: string, file: File): Promise<CustomerDocument | null> {
+  const ext = file.name.split('.').pop()
+  const path = `${customerId}/${docType}_${Date.now()}.${ext}`
+  const { error: upErr } = await supabase.storage.from(DOC_BUCKET).upload(path, file, { upsert: true })
+  if (upErr) { console.error('[doc upload]', upErr.message); return null }
+  const { data: urlData } = supabase.storage.from(DOC_BUCKET).getPublicUrl(path)
+  const { data, error } = await supabase.from('customer_documents').insert({
+    customer_id: customerId,
+    doc_type: docType,
+    file_name: file.name,
+    file_url: urlData.publicUrl,
+    storage_path: path,
+  }).select().single()
+  if (error) { console.error('[doc insert]', error.message); return null }
+  return data as CustomerDocument
+}
+
+async function deleteCustomerDoc(doc: CustomerDocument) {
+  await supabase.storage.from(DOC_BUCKET).remove([doc.storage_path])
+  await supabase.from('customer_documents').delete().eq('id', doc.id)
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function maskCard(num: string) {
@@ -201,19 +287,28 @@ function CustomerPanel({
   })
   const [cards, setCards] = useState<DraftCard[]>([])
   const [accts, setAccts] = useState<DraftAcct[]>([])
+  const [notes, setNotes] = useState<string>(customer?.notes || '')
+  const [pendingDocs, setPendingDocs] = useState<{ docType: 'aadhaar' | 'pan'; file: File }[]>([])
+  const [existingDocs, setExistingDocs] = useState<CustomerDocument[]>([])
+  const [uploadingDocs, setUploadingDocs] = useState(false)
+  const [viewDoc, setViewDoc] = useState<CustomerDocument | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
 
   useEffect(() => {
     if (!isEdit || !customer) return
-    // Load existing cards
     supabase.from('cards').select('*').eq('customer_id', customer.id).then(({ data }) => {
       if (data) setCards((data as Card[]).map(c => ({ ...c, _key: c.id, _expanded: false })))
     })
-    // Load existing bank accounts
     supabase.from('customer_bank_accounts').select('*').eq('customer_id', customer.id).then(({ data }) => {
       if (data) setAccts((data as CustomerBankAccount[]).map(a => ({ ...a, _key: a.id })))
+    })
+    supabase.from('customer_documents').select('*').eq('customer_id', customer.id).order('created_at').then(({ data, error: e }) => {
+      if (!e && data) setExistingDocs(data as CustomerDocument[])
+    })
+    supabase.from('customers').select('notes').eq('id', customer.id).single().then(({ data, error: e }) => {
+      if (!e && data) setNotes((data as Record<string, string>).notes || '')
     })
   }, [customer, isEdit])
 
@@ -262,6 +357,13 @@ function CustomerPanel({
 
       console.log('[save] customerId =', customerId)
 
+      // Save notes separately — silently skip if column not yet migrated
+      if (customerId) {
+        await supabaseAdmin.from('customers').update({ notes: notes.trim() || null }).eq('id', customerId).then(({ error: ne }) => {
+          if (ne) console.warn('[save] notes column not ready — run customer_documents.sql migration:', ne.message)
+        })
+      }
+
       // Cards: delete all existing, then insert fresh
       if (isEdit && customer) {
         const { error: de } = await supabaseAdmin.from('cards').delete().eq('customer_id', customer.id)
@@ -304,6 +406,17 @@ function CustomerPanel({
         })
         if (ae) throw new Error('Save bank account failed: ' + ae.message)
         console.log('[save] account inserted:', a.bank_name)
+      }
+
+      // Upload pending documents — silently skip if bucket not yet created
+      if (pendingDocs.length > 0) {
+        setUploadingDocs(true)
+        for (const { docType, file } of pendingDocs) {
+          const result = await uploadCustomerDoc(customerId!, docType, file)
+          if (!result) console.warn('[save] doc upload failed — run customer_documents.sql migration and create customer-docs bucket')
+        }
+        setPendingDocs([])
+        setUploadingDocs(false)
       }
 
       console.log('[save] done — cards:', validCards.length, 'accounts:', validAccts.length)
@@ -457,6 +570,91 @@ function CustomerPanel({
                 </div>
             }
           </div>
+
+          {/* Documents */}
+          <div>
+            <div className="text-[10px] font-bold text-[#9ca3af] uppercase tracking-widest mb-3 pb-1 border-b border-[#f3f4f6] flex items-center gap-1">
+              <FileText size={11} /> KYC Documents
+            </div>
+            <div className="flex flex-col gap-3">
+              {(['aadhaar', 'pan'] as const).map(docType => {
+                const existing = existingDocs.find(d => d.doc_type === docType)
+                const pending = pendingDocs.find(d => d.docType === docType)
+                const label = DOC_LABELS[docType]
+                return (
+                  <div key={docType} className="flex items-center justify-between rounded-lg border px-3 py-2.5" style={{ borderColor: '#e5e7eb', background: existing || pending ? '#f0fdf4' : '#fafafa' }}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="p-1.5 rounded" style={{ background: existing || pending ? '#dcfce7' : '#f3f4f6' }}>
+                        <FileText size={14} color={existing || pending ? '#16a34a' : '#9ca3af'} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-[#374151]">{label}</div>
+                        {(existing || pending) ? (
+                          <div className="text-[10px] text-[#16a34a] truncate max-w-[180px]">
+                            {pending ? `Ready: ${pending.file.name}` : existing!.file_name}
+                          </div>
+                        ) : (
+                          <div className="text-[10px] text-[#9ca3af]">Not uploaded</div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {existing && (
+                        <>
+                          <button type="button"
+                            onClick={() => setViewDoc(existing)}
+                            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium border hover:bg-white"
+                            style={{ borderColor: '#bbf7d0', color: '#16a34a' }}>
+                            <Eye size={10} /> View
+                          </button>
+                          <button type="button"
+                            onClick={async () => { await deleteCustomerDoc(existing); setExistingDocs(d => d.filter(x => x.id !== existing.id)) }}
+                            className="p-1 rounded hover:bg-red-50 text-red-400">
+                            <Trash2 size={11} />
+                          </button>
+                        </>
+                      )}
+                      {pending && !existing && (
+                        <button type="button"
+                          onClick={() => setPendingDocs(d => d.filter(x => x.docType !== docType))}
+                          className="p-1 rounded hover:bg-red-50 text-red-400">
+                          <X size={11} />
+                        </button>
+                      )}
+                      <label className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium border cursor-pointer hover:bg-white"
+                        style={{ borderColor: '#e5e7eb', color: '#374151' }}>
+                        <Upload size={10} /> {existing || pending ? 'Replace' : 'Upload'}
+                        <input type="file" className="hidden" accept="image/*,.pdf"
+                          onChange={e => {
+                            const file = e.target.files?.[0]
+                            if (!file) return
+                            setPendingDocs(d => [...d.filter(x => x.docType !== docType), { docType, file }])
+                            e.target.value = ''
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )
+              })}
+              {uploadingDocs && <div className="text-[10px] text-[#3ECF8E] animate-pulse">Uploading documents...</div>}
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <div className="text-[10px] font-bold text-[#9ca3af] uppercase tracking-widest mb-2 pb-1 border-b border-[#f3f4f6] flex items-center gap-1">
+              <StickyNote size={11} /> Notes
+            </div>
+            <textarea
+              className="w-full rounded border px-3 py-2 text-xs outline-none focus:border-[#3ECF8E] transition-colors bg-white resize-none"
+              style={{ borderColor: '#e5e7eb' }}
+              rows={3}
+              placeholder="Add any notes about this customer — e.g. reference, special terms, contact info..."
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+            />
+          </div>
         </div>
 
         {/* footer */}
@@ -479,6 +677,7 @@ function CustomerPanel({
           </button>
         </div>
       </div>
+      {viewDoc && <DocViewer doc={viewDoc} onClose={() => setViewDoc(null)} />}
     </>
   )
 }
@@ -490,13 +689,16 @@ function ExpandedRow({
   customer: Customer
   txns: Transaction[]
 }) {
-  const [tab, setTab] = useState<'cards' | 'accounts'>('cards')
+  const [tab, setTab] = useState<'cards' | 'accounts' | 'documents'>('cards')
   const [cards, setCards] = useState<Card[]>([])
   const [accts, setAccts] = useState<CustomerBankAccount[]>([])
+  const [docs, setDocs] = useState<CustomerDocument[]>([])
+  const [viewDoc, setViewDoc] = useState<CustomerDocument | null>(null)
 
   useEffect(() => {
     supabase.from('cards').select('*').eq('customer_id', customer.id).then(({ data }) => setCards((data as Card[]) || []))
     supabase.from('customer_bank_accounts').select('*').eq('customer_id', customer.id).then(({ data }) => setAccts((data as CustomerBankAccount[]) || []))
+    supabase.from('customer_documents').select('*').eq('customer_id', customer.id).order('created_at').then(({ data, error: e }) => { if (!e && data) setDocs(data as CustomerDocument[]) })
   }, [customer.id])
 
   async function deleteCard(id: string) {
@@ -543,20 +745,31 @@ function ExpandedRow({
 
         {/* Tabs */}
         <div className="flex gap-1 mb-3 border-b border-[#e5e7eb]">
-          {(['cards', 'accounts'] as const).map(t => (
+          {([
+            { key: 'cards', label: `Cards (${cards.length})` },
+            { key: 'accounts', label: `Bank Accounts (${accts.length})` },
+            { key: 'documents', label: `Documents (${docs.length})` },
+          ] as { key: 'cards' | 'accounts' | 'documents'; label: string }[]).map(({ key, label }) => (
             <button
-              key={t}
-              onClick={() => setTab(t)}
-              className="px-3 py-1.5 text-xs font-medium capitalize transition-colors"
+              key={key}
+              onClick={() => setTab(key)}
+              className="px-3 py-1.5 text-xs font-medium transition-colors"
               style={{
-                borderBottom: tab === t ? '2px solid #3ECF8E' : '2px solid transparent',
-                color: tab === t ? '#3ECF8E' : '#6b7280',
+                borderBottom: tab === key ? '2px solid #3ECF8E' : '2px solid transparent',
+                color: tab === key ? '#3ECF8E' : '#6b7280',
               }}
             >
-              {t === 'cards' ? `Cards (${cards.length})` : `Bank Accounts (${accts.length})`}
+              {label}
             </button>
           ))}
         </div>
+
+        {customer.notes && tab !== 'documents' && (
+          <div className="mb-3 rounded-lg border px-3 py-2 flex items-start gap-2" style={{ borderColor: '#fde68a', background: '#fffbeb' }}>
+            <StickyNote size={12} color="#92400e" style={{ flexShrink: 0, marginTop: 1 }} />
+            <div className="text-xs text-[#374151] whitespace-pre-wrap">{customer.notes}</div>
+          </div>
+        )}
 
         {tab === 'cards' && (
           <table className="w-full text-xs">
@@ -614,6 +827,47 @@ function ExpandedRow({
           </table>
         )}
 
+        {tab === 'documents' && (
+          <div>
+            {docs.length === 0 ? (
+              <div className="text-xs text-[#9ca3af] py-3">No documents uploaded yet. Click Edit to upload Aadhaar / PAN.</div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {docs.map(d => (
+                  <div key={d.id} className="flex items-center justify-between rounded-lg border px-3 py-2.5" style={{ borderColor: '#bbf7d0', background: '#f0fdf4' }}>
+                    <div className="flex items-center gap-2">
+                      <FileText size={15} color="#16a34a" />
+                      <div>
+                        <div className="text-xs font-semibold text-[#374151]">{DOC_LABELS[d.doc_type] || d.doc_type}</div>
+                        <div className="text-[10px] text-[#6b7280]">{d.file_name} · {new Date(d.created_at).toLocaleDateString('en-IN')}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setViewDoc(d)}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-medium border"
+                        style={{ borderColor: '#bbf7d0', color: '#16a34a', background: '#fff' }}>
+                        <Eye size={10} /> View
+                      </button>
+                      <button
+                        onClick={async () => { await deleteCustomerDoc(d); setDocs(ds => ds.filter(x => x.id !== d.id)) }}
+                        className="p-1 rounded hover:bg-red-50 text-red-400">
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {customer.notes && (
+              <div className="mt-3 rounded-lg border px-3 py-2.5" style={{ borderColor: '#e5e7eb', background: '#fffbeb' }}>
+                <div className="flex items-center gap-1 text-[10px] font-bold text-[#92400e] uppercase mb-1"><StickyNote size={10} /> Note</div>
+                <div className="text-xs text-[#374151] whitespace-pre-wrap">{customer.notes}</div>
+              </div>
+            )}
+          </div>
+        )}
+
         {txns.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-semibold text-[#6b7280] uppercase mb-2">Recent Transactions</div>
@@ -637,6 +891,7 @@ function ExpandedRow({
             </table>
           </div>
         )}
+        {viewDoc && <DocViewer doc={viewDoc} onClose={() => setViewDoc(null)} />}
       </td>
     </tr>
   )

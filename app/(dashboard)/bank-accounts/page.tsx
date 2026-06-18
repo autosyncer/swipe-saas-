@@ -152,7 +152,6 @@ function AccountPanel({
   async function handleSave() {
     if (!form.account_name.trim()) { setError('Account name is required'); return }
     if (!form.bank_name.trim()) { setError('Bank name is required'); return }
-    if (!form.commission_pct) { setError('Commission % is required'); return }
     if (!machine.machine_name.trim() || !machine.tid.trim()) {
       setError('Machine Name and TID are required for the swipe machine'); return
     }
@@ -278,11 +277,7 @@ function AccountPanel({
                   </div>
                 </Section>
 
-                <Section title="Commission Settings">
-                  <div className="mb-3">
-                    <Label>Commission % *</Label>
-                    <input type="number" step="0.001" className={inp()} placeholder="1.320" value={form.commission_pct} onChange={e => set('commission_pct', e.target.value)} />
-                  </div>
+                <Section title="Notes">
                   <div>
                     <Label>Notes (optional)</Label>
                     <textarea className={inp()} rows={2} placeholder="Any notes about this account..." value={form.notes} onChange={e => set('notes', e.target.value)} />
@@ -326,25 +321,19 @@ function AccountPanel({
                     <Label>Machine Name *</Label>
                     <input className={inp()} placeholder="e.g. NSS BONUSHUB" value={machine.machine_name} onChange={e => setM('machine_name', e.target.value.toUpperCase())} />
                   </div>
-                  <div className="mb-3">
+                  <div>
                     <Label>TID *</Label>
                     <input className={inp()} placeholder="e.g. TID 63012501" value={machine.tid} onChange={e => setM('tid', e.target.value.toUpperCase())} />
-                  </div>
-                  <div>
-                    <Label>Machine Type</Label>
-                    <select className={inp()} value={machine.machine_type} onChange={e => setM('machine_type', e.target.value)}>
-                      {MACHINE_TYPE_OPTIONS.map(t => <option key={t}>{t}</option>)}
-                    </select>
                   </div>
                 </Section>
 
                 <Section title="Commission & Agent">
                   <div className="mb-3">
-                    <Label>Agent Code</Label>
+                    <Label>Machine / Bank Code</Label>
                     <input className={inp()} placeholder="e.g. AMS019" value={machine.agent_code} onChange={e => setM('agent_code', e.target.value.toUpperCase())} />
                   </div>
                   <div>
-                    <Label>Bank Commission % (3 decimals)</Label>
+                    <Label>MDR Charges % (3 decimals)</Label>
                     <input type="number" step="0.001" className={inp()} placeholder="1.320" value={machine.bank_commission_pct} onChange={e => setM('bank_commission_pct', e.target.value)} />
                   </div>
                 </Section>

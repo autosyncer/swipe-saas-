@@ -114,47 +114,46 @@ create policy "Admins manage l15_entries" on l15_entries for all
 create or replace function recalculate_chamunda_totals(p_date date)
 returns void language plpgsql security definer as $$
 declare
-  v_cash_in    numeric(12,2) := 0;
-  v_paid_out   numeric(12,2) := 0;
-  v_expenses   numeric(12,2) := 0;
-  v_commission numeric(12,2) := 0;
-  v_closing    numeric(12,2) := 0;
+  v_cash_in       numeric(12,2) := 0;
+  v_paid_in_cash  numeric(12,2) := 0;
+  v_cash_gp_recd  numeric(12,2) := 0;
+  v_expenses      numeric(12,2) := 0;
+  v_closing       numeric(12,2) := 0;
 begin
-  -- Cash in = all opening rows
+  -- Cash in = all opening rows (cash in hand, hdfc, l15, person entries)
   select coalesce(sum(opening_amount), 0) into v_cash_in
   from chamunda_sheet
   where date = p_date
     and row_type in ('opening_cash','opening_hdfc','opening_l15','opening_person');
 
-  -- Paid out = cash given to customers
-  select coalesce(sum(paid_amount), 0) into v_paid_out
+  -- Cash paid OUT to customers (column E: Paid in Cash)
+  select coalesce(sum(paid_in_cash), 0) into v_paid_in_cash
   from chamunda_sheet
   where date = p_date and row_type = 'transaction';
 
-  -- Expenses
+  -- Cash/GP received (column J: Cash/GP Recd)
+  select coalesce(sum(cash_gp_recd), 0) into v_cash_gp_recd
+  from chamunda_sheet
+  where date = p_date and row_type = 'transaction';
+
+  -- Expenses paid in cash
   select coalesce(sum(expense_amount), 0) into v_expenses
   from chamunda_sheet
   where date = p_date and row_type = 'expense';
 
-  -- Commission earned (swap - paid, for TRF/CH rows)
-  select coalesce(sum(swap_amount - paid_amount), 0) into v_commission
-  from chamunda_sheet
-  where date = p_date
-    and row_type = 'transaction'
-    and (commission_type like 'TRF%' or commission_type like 'CH%');
-
-  v_closing := v_cash_in - v_paid_out + v_commission - v_expenses;
+  -- Closing = Opening Cash In − Cash Paid Out + Cash/GP Received − Expenses
+  v_closing := v_cash_in - v_paid_in_cash + v_cash_gp_recd - v_expenses;
 
   -- Upsert total row
   update chamunda_sheet
      set total_cash_in   = v_cash_in,
-         total_paid_out  = v_paid_out,
+         total_paid_out  = v_paid_in_cash,
          closing_balance = v_closing
    where date = p_date and row_type = 'total';
 
   if not found then
     insert into chamunda_sheet (date, row_type, sort_order, total_cash_in, total_paid_out, closing_balance)
-    values (p_date, 'total', 9999, v_cash_in, v_paid_out, v_closing);
+    values (p_date, 'total', 9999, v_cash_in, v_paid_in_cash, v_closing);
   end if;
 end;
 $$;
