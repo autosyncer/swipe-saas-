@@ -53,13 +53,17 @@ export async function createChamundaSheetRow(transaction: Record<string, unknown
     if (commType === 'Exclusive') commStr = `CH ${commPct}`
     if (commType === 'Deferred')  commStr = 'PAY PURU'
 
+    // Only put paid_in_cash in Chamunda Sheet when payment was actual cash (not ATM/WITHD/TRANSF/CC PAY/CUST TRF)
+    const cashType = String(transaction.cash_type || '')
+    const isCashPayment = !cashType || cashType === 'CASH'
+
     const row: Record<string, unknown> = {
       date,
       row_type: 'transaction',
       transaction_id: transaction.id || null,
       bank_charge_pct: 3.00,
       paid_amount: Number(transaction.paid_amount) || 0,
-      ...(transaction.paid_in_cash ? { paid_in_cash: Number(transaction.paid_in_cash) } : {}),
+      ...(transaction.paid_in_cash && isCashPayment ? { paid_in_cash: Number(transaction.paid_in_cash) } : {}),
       swap_amount: Number(transaction.swap_amount) || 0,
       commission_pct: commPct,
       commission_type: commStr,
@@ -80,6 +84,83 @@ export async function createChamundaSheetRow(transaction: Record<string, unknown
     await supabase.rpc('recalculate_chamunda_totals', { p_date: date })
   } catch (err) {
     console.error('❌ createChamundaSheetRow exception:', err)
+  }
+}
+
+// ── Commission Sheet ──────────────────────────────────────────────────────────
+export async function createCommissionSheetRow(
+  transaction: Record<string, unknown>,
+  paymentMode?: string | null,
+  paymentModeDetail?: string | null,
+) {
+  try {
+    const commType   = String(transaction.commission_type || 'Inclusive')
+    const commAmount = Number(transaction.commission_amount) || 0
+    const commPct    = Number(transaction.commission_pct) || 0
+
+    const isDeferred = commType === 'Deferred'
+    // Inclusive & Exclusive are paid at transaction time; only Deferred is pending
+    const isPaid = !isDeferred
+
+    // Inclusive has no external payment mode; Exclusive carries the mode chosen in the form
+    const storedMode   = commType === 'Exclusive' ? (paymentMode || null) : null
+    const storedDetail = commType === 'Exclusive' ? (paymentModeDetail || null) : null
+
+    const { error } = await supabase.from('commission_sheet').insert({
+      transaction_id:      transaction.id || null,
+      date:                String(transaction.date || ''),
+      sr_no:               transaction.sr_no ? Number(transaction.sr_no) : null,
+      customer_name:       String(transaction.customer_name || ''),
+      swap_machine:        String(transaction.swap_name || ''),
+      commission_pct:      commPct,
+      commission_amount:   commAmount,
+      commission_type:     commType,
+      payment_mode:        storedMode,
+      payment_mode_detail: storedDetail,
+      status:              isPaid ? 'Paid' : 'Pending',
+      paid_date:           isPaid ? String(transaction.date || '') : null,
+      paid_amount:         isPaid ? commAmount : 0,
+    })
+    if (error) console.error('[Commission Sheet] insert error:', error.message)
+
+    // Deferred → auto-create a reminder for 7 days later
+    if (isDeferred && commAmount > 0) {
+      const txDate = String(transaction.date || '')
+      const reminderDate = new Date(txDate)
+      reminderDate.setDate(reminderDate.getDate() + 7)
+      const rDate = reminderDate.toISOString().split('T')[0]
+      await supabase.from('reminders').insert({
+        title:         `Collect commission — ${String(transaction.customer_name || '')}`,
+        description:   `SR #${transaction.sr_no || ''} · ₹${commAmount} · ${commPct}% commission`,
+        reminder_date: rDate,
+        reminder_time: '10:00:00',
+        type:          'commission',
+        customer_name: String(transaction.customer_name || ''),
+        amount:        commAmount,
+        status:        'pending',
+      }).then(({ error: rErr }) => {
+        if (rErr) console.warn('[Commission Reminder] insert error:', rErr.message)
+      })
+    }
+
+    // Cash commission → chamunda sheet below L-15 as opening_person entry
+    if (storedMode === 'Cash' && commAmount > 0) {
+      const txDate = String(transaction.date || '')
+      // Ensure the date is initialised before inserting the person row
+      await supabase.rpc('initialize_chamunda_sheet', { p_date: txDate })
+      const { error: cErr } = await supabase.from('chamunda_sheet').insert({
+        date:           txDate,
+        row_type:       'opening_person',
+        sort_order:     35,             // L-15 is 30, so this sits just below it
+        opening_name:   String(transaction.customer_name || ''),
+        opening_amount: commAmount,
+        transaction_id: transaction.id || null,
+      })
+      if (cErr) console.warn('[Commission→Chamunda] insert error:', cErr.message)
+      else await supabase.rpc('recalculate_chamunda_totals', { p_date: txDate })
+    }
+  } catch (err) {
+    console.error('[Commission Sheet] error:', err)
   }
 }
 

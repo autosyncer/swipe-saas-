@@ -5,7 +5,8 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
   Home, LayoutGrid, Terminal, Users, CreditCard,
-  FileText, Bell, AlertTriangle, BarChart2, List, Grid, Settings, Landmark, Package, Receipt
+  FileText, Bell, BellRing, AlertTriangle, BarChart2, List, Grid, Settings, Landmark, Package, Receipt,
+  ChevronDown, ArrowRightLeft, RefreshCw,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import { supabase } from '@/lib/supabase'
@@ -14,7 +15,6 @@ const navGroups = [
   [
     { icon: Home, label: 'Dashboard', href: '/dashboard', superOnly: false },
     { icon: LayoutGrid, label: 'Sheet Editor', href: '/sheets', superOnly: false },
-    { icon: Terminal, label: 'New Entry', href: '/entry', superOnly: false },
   ],
   [
     { icon: Users, label: 'Customers', href: '/customers', superOnly: false },
@@ -25,6 +25,7 @@ const navGroups = [
     { icon: Receipt, label: 'Invoices', href: '/invoices', superOnly: false },
   ],
   [
+    { icon: BellRing, label: 'Notifications', href: '/notifications', superOnly: false },
     { icon: Bell, label: 'Reminders', href: '/reminders', superOnly: false },
     { icon: AlertTriangle, label: 'Risk Alerts', href: '/alerts', superOnly: false },
     { icon: BarChart2, label: 'Analytics', href: '/analytics', superOnly: false },
@@ -41,6 +42,9 @@ export default function Sidebar() {
   const isSuperAdmin = auth?.role === 'super_admin'
   const [alertCount, setAlertCount] = useState(0)
   const [reminderCount, setReminderCount] = useState(0)
+  const [pendingSwapCount, setPendingSwapCount] = useState(0)
+  const isEntryActive = pathname.startsWith('/entry')
+  const [entryOpen, setEntryOpen] = useState(isEntryActive)
 
   useEffect(() => {
     
@@ -65,13 +69,26 @@ export default function Sidebar() {
       setReminderCount((overdueCount ?? 0) + (dueSoonCount ?? 0))
     }
 
+    const fetchPendingSwapCount = async () => {
+      const [{ data: released }, { data: swaps }] = await Promise.all([
+        supabase.from('swap_releases').select('transaction_id'),
+        supabase.from('transactions').select('id').eq('entry_type', 'swap'),
+      ])
+      const releasedIds = new Set((released || []).map((r: { transaction_id: string }) => r.transaction_id))
+      const pending = (swaps || []).filter((t: { id: string }) => !releasedIds.has(t.id))
+      setPendingSwapCount(pending.length)
+    }
+
     fetchAlertCount()
     fetchReminderCount()
+    fetchPendingSwapCount()
 
     const channel = supabase
       .channel('sidebar_counts')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'risk_alerts' }, fetchAlertCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, fetchReminderCount)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, fetchPendingSwapCount)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'swap_releases' }, fetchPendingSwapCount)
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
@@ -137,9 +154,80 @@ export default function Sidebar() {
                         {reminderCount > 99 ? '99+' : reminderCount}
                       </span>
                     )}
+                    {href === '/notifications' && pendingSwapCount > 0 && (
+                      <span style={{ background: '#3ECF8E', color: 'white', borderRadius: '999px', padding: '1px 6px', fontSize: '10px', fontWeight: 700, lineHeight: '16px', flexShrink: 0 }}>
+                        {pendingSwapCount > 99 ? '99+' : pendingSwapCount}
+                      </span>
+                    )}
                   </Link>
                 )
               })}
+
+              {/* New Entry expandable — inserted after first group */}
+              {gi === 0 && (
+                <>
+                  {/* Parent row */}
+                  <button
+                    onClick={() => setEntryOpen(o => !o)}
+                    className="w-full flex items-center gap-3 py-[10px] text-sm transition-colors"
+                    style={{
+                      background: isEntryActive ? '#2a2a2a' : 'transparent',
+                      borderLeft: isEntryActive ? '3px solid #3ECF8E' : '3px solid transparent',
+                      color: isEntryActive ? '#ffffff' : '#9ca3af',
+                      paddingLeft: 13,
+                      paddingRight: 16,
+                    }}
+                    onMouseEnter={e => {
+                      if (!isEntryActive) (e.currentTarget as HTMLElement).style.background = '#2a2a2a'
+                    }}
+                    onMouseLeave={e => {
+                      if (!isEntryActive) (e.currentTarget as HTMLElement).style.background = 'transparent'
+                    }}
+                  >
+                    <Terminal size={20} color={isEntryActive ? '#3ECF8E' : '#9ca3af'} style={{ flexShrink: 0 }} />
+                    <span style={{ whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>New Entry</span>
+                    <ChevronDown
+                      size={14}
+                      color={isEntryActive ? '#3ECF8E' : '#6b7280'}
+                      style={{ flexShrink: 0, transition: 'transform 0.2s', transform: entryOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                    />
+                  </button>
+
+                  {/* Sub-items */}
+                  {entryOpen && (
+                    <div style={{ background: '#141414' }}>
+                      {[
+                        { icon: ArrowRightLeft, label: 'Card Swap', href: '/entry?type=swap' },
+                        { icon: RefreshCw,      label: 'Card Refill', href: '/entry?type=refill' },
+                      ].map(({ icon: SubIcon, label: subLabel, href: subHref }) => {
+                        const subActive = pathname === '/entry' && (
+                          (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('type') === subHref.split('=')[1])
+                        )
+                        return (
+                          <Link
+                            key={subHref}
+                            href={subHref}
+                            className="flex items-center gap-3 py-[9px] text-sm transition-colors"
+                            style={{
+                              paddingLeft: 40,
+                              paddingRight: 16,
+                              color: subActive ? '#3ECF8E' : '#6b7280',
+                              borderLeft: subActive ? '3px solid #3ECF8E' : '3px solid transparent',
+                              background: subActive ? '#1e1e1e' : 'transparent',
+                            }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = '#1e1e1e' }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = subActive ? '#1e1e1e' : 'transparent' }}
+                          >
+                            <SubIcon size={15} color={subActive ? '#3ECF8E' : '#6b7280'} style={{ flexShrink: 0 }} />
+                            <span style={{ fontSize: 13 }}>{subLabel}</span>
+                          </Link>
+                        )
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+
               {gi < navGroups.length - 1 && (
                 <div style={{ height: 1, background: '#2a2a2a', margin: '8px 0' }} />
               )}

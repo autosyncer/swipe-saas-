@@ -7,8 +7,8 @@ import { supabase } from '@/lib/supabase'
 import { Transaction, Customer, Card } from '@/types/database'
 import { logAction } from '@/lib/audit-log'
 import { runRiskDetection } from '@/lib/risk-engine'
-import { deductTransactionFromAcSheet, getAccountCurrentBalance, AccountBalanceInfo } from '@/lib/ac-sheet'
-import { createCCSheetRow, createChamundaSheetRow, createCustomerSheetRow as createCustomerSheetRowHelper } from '@/lib/sheet-helpers'
+import { deductTransactionFromAcSheet, getAccountCurrentBalance, AccountBalanceInfo, updateAcSheetCashType } from '@/lib/ac-sheet'
+import { createCCSheetRow, createChamundaSheetRow, createCustomerSheetRow as createCustomerSheetRowHelper, createCommissionSheetRow } from '@/lib/sheet-helpers'
 import { saveTransactionToStorage } from '@/lib/transaction-backup'
 
 // Loaded dynamically from bank_account_master
@@ -21,6 +21,9 @@ interface AccountEntry {
   commPct: string
   commType: string
   commPayMode: string
+  commUpiId: string
+  commNetBankId: string
+  cashType: string
   totalAmount: string
   paidAmount: string
   paidInCash: string
@@ -35,6 +38,7 @@ function makeEntry(defaultCommPct = DEFAULT_COMM.toString()): AccountEntry {
     id: Math.random().toString(36).slice(2),
     accountName: '', machineName: '',
     commPct: defaultCommPct, commType: 'Inclusive', commPayMode: 'Cash',
+    commUpiId: '', commNetBankId: '', cashType: '',
     totalAmount: '', paidAmount: '', paidInCash: '', swapAmount: '',
     difference: '', remarks: 'PAID', acctDropOpen: false,
   }
@@ -83,6 +87,11 @@ function EntryPageInner() {
   const searchParams = useSearchParams()
   const prefillCustomerId = searchParams.get('customer_id')
   const prefillCustomerName = searchParams.get('customer_name')
+  const entryType = (searchParams.get('type') || 'swap') as 'swap' | 'refill'
+  const entryTypeLabel = entryType === 'refill' ? 'Card Refill' : 'Card Swap'
+  const entryTypeBadgeStyle = entryType === 'refill'
+    ? { background: '#eff6ff', color: '#1d4ed8' }
+    : { background: '#f0fdf4', color: '#16a34a' }
 
   const getToday = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
   const [today, setToday] = useState(getToday)
@@ -120,6 +129,8 @@ function EntryPageInner() {
   const [machineNames, setMachineNames] = useState<string[]>(SWAP_SUGGESTIONS)
   const [accountOptions, setAccountOptions] = useState<string[]>([])
   const [accountMachineMap, setAccountMachineMap] = useState<Record<string, string>>({})
+  const [upiAccounts, setUpiAccounts] = useState<{ id: string; name: string; upi_id: string }[]>([])
+  const [netBankAccounts, setNetBankAccounts] = useState<{ id: string; name: string; bank_name: string; account_number: string }[]>([])
 
   // Right panel
   const [todayEntries, setTodayEntries] = useState<Transaction[]>([])
@@ -188,6 +199,16 @@ function EntryPageInner() {
         })
         setAccountMachineMap(map)
       }
+    })
+  }, [])
+
+  // ── Load UPI + net banking accounts for commission payment ──
+  useEffect(() => {
+    supabase.from('upi_accounts').select('id, name, upi_id').eq('is_active', true).order('name').then(({ data }) => {
+      setUpiAccounts((data as typeof upiAccounts) || [])
+    })
+    supabase.from('net_banking_accounts').select('id, name, bank_name, account_number').eq('is_active', true).order('name').then(({ data }) => {
+      setNetBankAccounts((data as typeof netBankAccounts) || [])
     })
   }, [])
 
@@ -287,6 +308,9 @@ function EntryPageInner() {
         const swap = updated.commType === 'Inclusive' ? total + commAmt : total
         updated.paidAmount = total.toString()
         updated.swapAmount = Math.round(swap).toString()
+        // Exclusive & Deferred: difference = commission amount (paid separately)
+        if (updated.commType === 'Exclusive' || updated.commType === 'Deferred') updated.difference = commAmt.toString()
+        else if ('commType' in patch) updated.difference = ''
       }
       return updated
     }))
@@ -657,7 +681,7 @@ function EntryPageInner() {
     for (const entry of validEntries) {
       const total = parseFloat(entry.totalAmount) || 0
       const comm = parseFloat(entry.commPct) || DEFAULT_COMM
-      const commAmt = entry.commType === 'Deferred' ? 0 : Math.round(total * comm / 100)
+      const commAmt = Math.round(total * comm / 100)
       const payload = {
         date: today,
         customer_name: form.customerName.trim(),
@@ -665,6 +689,7 @@ function EntryPageInner() {
         total_amount: total,
         paid_amount: parseFloat(entry.paidAmount) || 0,
         ...(entry.paidInCash ? { paid_in_cash: parseFloat(entry.paidInCash) } : {}),
+        ...(entry.cashType ? { cash_type: entry.cashType } : {}),
         account_name: entry.accountName,
         swap_amount: parseFloat(entry.swapAmount) || 0,
         swap_name: entry.machineName,
@@ -674,6 +699,7 @@ function EntryPageInner() {
         commission_pct: comm,
         commission_amount: commAmt,
         commission_type: entry.commType,
+        entry_type: entryType,
         commodity_items: [],
       }
       const { data, error } = await supabase.from('transactions').insert(payload).select().single()
@@ -682,29 +708,39 @@ function EntryPageInner() {
         hasError = true
         break
       }
+      // Set release_status separately so INSERT doesn't fail if column not yet in schema cache
+      await supabase.from('transactions').update({
+        release_status: entryType === 'swap' ? 'pending' : 'released',
+      }).eq('id', data.id)
       savedSrNos.push(data.sr_no)
       lastTransaction = data as Record<string, unknown>
       createCCSheetRow(data as Record<string, unknown>)
       createChamundaSheetRow(data as Record<string, unknown>)
       createCustomerSheetRowHelper(data as Record<string, unknown>, snapCustomer?.id || null, snapReminderDate || null)
-      ;(async () => {
-        try {
-          const swapAmt = Number(data.swap_amount)
-          const acctName = data.account_name as string
-          console.log('[AC deduct] account:', acctName, 'swap_amount:', swapAmt, 'date:', data.date)
-          if (!swapAmt || !acctName) {
-            console.warn('[AC deduct] skipped – missing swap_amount or account_name')
-            return
-          }
-          const results = await deductTransactionFromAcSheet({ date: data.date as string, account_name: acctName, swap_amount: swapAmt })
-          console.log('[AC deduct] results:', results)
-          const lowAccounts = results.filter(r => r.low_balance)
-          if (lowAccounts.length > 0) {
-            const names = lowAccounts.map(r => `${r.account_name} (₹${r.closing_bal.toLocaleString('en-IN')})`).join(', ')
-            setTimeout(() => setToast({ msg: `⚠️ Low Balance: ${names}`, type: 'error' }), 3500)
-          }
-        } catch (e) { console.error('[AC Sheet update failed]', e) }
-      })()
+      createCommissionSheetRow(data as Record<string, unknown>, entry.commPayMode || null)
+      // Card Swap: AC deduction happens only after confirm & release in Notifications
+      // Card Refill: deduct immediately as before
+      if (entryType !== 'swap') {
+        ;(async () => {
+          try {
+            const swapAmt = Number(data.swap_amount)
+            const acctName = data.account_name as string
+            if (!swapAmt || !acctName) return
+            const results = await deductTransactionFromAcSheet({ date: data.date as string, account_name: acctName, swap_amount: swapAmt })
+            const lowAccounts = results.filter(r => r.low_balance)
+            if (lowAccounts.length > 0) {
+              const names = lowAccounts.map(r => `${r.account_name} (₹${r.closing_bal.toLocaleString('en-IN')})`).join(', ')
+              setTimeout(() => setToast({ msg: `⚠️ Low Balance: ${names}`, type: 'error' }), 3500)
+            }
+            if (entry.cashType && entry.cashType !== 'CASH' && entry.paidInCash) {
+              const cashAmt = parseFloat(entry.paidInCash) || 0
+              if (cashAmt > 0 && acctName) {
+                await updateAcSheetCashType({ date: data.date as string, account_name: acctName, cashType: entry.cashType, amount: cashAmt })
+              }
+            }
+          } catch (e) { console.error('[AC Sheet update failed]', e) }
+        })()
+      }
       logAction({ action: 'Transaction Created', module: 'Daily Register', details: { sr_no: data.sr_no, customer_name: data.customer_name, account_name: data.account_name, total_amount: data.total_amount } })
     }
 
@@ -820,7 +856,12 @@ function EntryPageInner() {
         </div>
 
         <div className="flex items-center justify-between">
-          <h1 className="text-lg font-bold text-[#1a1a1a]">New Entry</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-lg font-bold text-[#1a1a1a]">New Entry</h1>
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={entryTypeBadgeStyle}>
+              {entryTypeLabel}
+            </span>
+          </div>
           <span className="text-xs text-[#6b7280] bg-[#f0fdf4] px-2 py-1 rounded font-medium">
             SR #{nextSrNo}
           </span>
@@ -1066,38 +1107,130 @@ function EntryPageInner() {
               </div>
 
               {/* Commission */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className={labelCls}>Commission %</label>
-                  <input type="number" step="0.01" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                    value={entry.commPct}
-                    onChange={e => updateEntry(entry.id, { commPct: e.target.value })}
-                    placeholder="2.20"
-                  />
-                </div>
-                <div>
-                  <label className={labelCls}>Commission Type</label>
-                  <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
-                    value={entry.commType}
-                    onChange={e => updateEntry(entry.id, { commType: e.target.value })}
-                  >
-                    <option value="Inclusive">Inclusive</option>
-                    <option value="Exclusive">Exclusive</option>
-                    <option value="Deferred">Deferred</option>
-                  </select>
-                </div>
-                <div className="col-span-2">
-                  <label className={labelCls}>Commission Pay Mode</label>
-                  <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
-                    value={entry.commPayMode}
-                    onChange={e => updateEntry(entry.id, { commPayMode: e.target.value })}
-                  >
-                    <option value="Cash">Cash</option>
-                    <option value="UPI">UPI</option>
-                    <option value="Net Banking">Net Banking</option>
-                  </select>
-                </div>
-              </div>
+              {(() => {
+                const total = parseFloat(entry.totalAmount) || 0
+                const comm = parseFloat(entry.commPct) || 0
+                const commAmt = total > 0 ? Math.round(total * comm / 100) : 0
+                const swapAmt = entry.commType === 'Inclusive' ? total + commAmt : total
+                const needsPayMode = entry.commType === 'Exclusive' || entry.commType === 'Deferred'
+                return (
+                  <div className="flex flex-col gap-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className={labelCls}>Commission %</label>
+                        <input type="number" step="0.01" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                          value={entry.commPct}
+                          onChange={e => updateEntry(entry.id, { commPct: e.target.value })}
+                          placeholder="2.20"
+                        />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Commission Type</label>
+                        <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
+                          value={entry.commType}
+                          onChange={e => updateEntry(entry.id, { commType: e.target.value, commPayMode: 'Cash', commUpiId: '', commNetBankId: '' })}
+                        >
+                          <option value="Inclusive">Inclusive</option>
+                          <option value="Exclusive">Exclusive</option>
+                          <option value="Deferred">Deferred</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Commission Type Logic Summary */}
+                    <div className="rounded-md px-3 py-2 text-xs" style={{
+                      background: entry.commType === 'Inclusive' ? '#f0fdf4' : entry.commType === 'Deferred' ? '#fff7ed' : '#eff6ff',
+                      border: `1px solid ${entry.commType === 'Inclusive' ? '#bbf7d0' : entry.commType === 'Deferred' ? '#fed7aa' : '#bfdbfe'}`,
+                    }}>
+                      {entry.commType === 'Inclusive' && (
+                        <div className="flex flex-col gap-0.5 text-[#166534]">
+                          <span className="font-semibold">Inclusive — commission included in swap amount</span>
+                          <span>Swap = Total + Commission &nbsp;|&nbsp; Difference = 0 &nbsp;|&nbsp; No separate payment needed</span>
+                          {total > 0 && <span className="font-medium mt-0.5">₹{total.toLocaleString('en-IN')} + ₹{commAmt.toLocaleString('en-IN')} = Swap ₹{swapAmt.toLocaleString('en-IN')}</span>}
+                        </div>
+                      )}
+                      {entry.commType === 'Exclusive' && (
+                        <div className="flex flex-col gap-0.5 text-[#1e40af]">
+                          <span className="font-semibold">Exclusive — commission paid separately by customer</span>
+                          <span>Swap = Total &nbsp;|&nbsp; Difference = Commission amount &nbsp;|&nbsp; Paid via UPI / Cash / Net Banking</span>
+                          {total > 0 && <span className="font-medium mt-0.5">Swap ₹{swapAmt.toLocaleString('en-IN')} &nbsp;|&nbsp; Collect ₹{commAmt.toLocaleString('en-IN')} separately</span>}
+                        </div>
+                      )}
+                      {entry.commType === 'Deferred' && (
+                        <div className="flex flex-col gap-0.5 text-[#9a3412]">
+                          <span className="font-semibold">Deferred — commission to be collected later</span>
+                          <span>Swap = Total &nbsp;|&nbsp; Difference = Commission amount &nbsp;|&nbsp; Added to deferred list for follow-up</span>
+                          {total > 0 && <span className="font-medium mt-0.5">Amount to collect later: ₹{commAmt.toLocaleString('en-IN')}</span>}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Pay Mode (Exclusive + Deferred) */}
+                    {needsPayMode && (
+                      <div className="flex flex-col gap-2">
+                        <div>
+                          <label className={labelCls}>{entry.commType === 'Deferred' ? 'Will Pay Via' : 'Commission Pay Mode'}</label>
+                          <div className="flex gap-2">
+                            {(['Cash', 'UPI', 'Net Banking'] as const).map(mode => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => updateEntry(entry.id, { commPayMode: mode, commUpiId: '', commNetBankId: '' })}
+                                className="flex-1 py-1.5 rounded-md text-xs font-medium border transition-colors"
+                                style={{
+                                  background: entry.commPayMode === mode ? '#1a1a1a' : '#f9fafb',
+                                  color: entry.commPayMode === mode ? '#ffffff' : '#374151',
+                                  borderColor: entry.commPayMode === mode ? '#1a1a1a' : '#e5e7eb',
+                                }}
+                              >{mode}</button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {entry.commPayMode === 'UPI' && (
+                          <div>
+                            <label className={labelCls}>UPI Account</label>
+                            <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
+                              value={entry.commUpiId}
+                              onChange={e => updateEntry(entry.id, { commUpiId: e.target.value })}
+                            >
+                              <option value="">Select UPI...</option>
+                              {upiAccounts.map(u => (
+                                <option key={u.id} value={u.id}>{u.name} — {u.upi_id}</option>
+                              ))}
+                            </select>
+                            {upiAccounts.length === 0 && (
+                              <p className="text-[10px] text-[#9ca3af] mt-1">No UPI accounts. Add them in the Sheets page.</p>
+                            )}
+                          </div>
+                        )}
+
+                        {entry.commPayMode === 'Net Banking' && (
+                          <div>
+                            <label className={labelCls}>Net Banking Account</label>
+                            <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
+                              value={entry.commNetBankId}
+                              onChange={e => updateEntry(entry.id, { commNetBankId: e.target.value })}
+                            >
+                              <option value="">Select account...</option>
+                              {netBankAccounts.map(nb => (
+                                <option key={nb.id} value={nb.id}>{nb.name} — {nb.bank_name} {nb.account_number}</option>
+                              ))}
+                            </select>
+                            {netBankAccounts.length === 0 && (
+                              <p className="text-[10px] text-[#9ca3af] mt-1">No net banking accounts. Add them in the Sheets page.</p>
+                            )}
+                          </div>
+                        )}
+
+                        {entry.commPayMode === 'Cash' && (
+                          <p className="text-[10px] text-[#6b7280] -mt-1">Cash commission will be recorded in Chamunda Sheet.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* Total + Paid */}
               <div className="grid grid-cols-2 gap-2">
@@ -1117,36 +1250,63 @@ function EntryPageInner() {
                     placeholder="0"
                   />
                 </div>
-                <div>
-                  {(() => {
-                    const cashVal = parseFloat(entry.paidInCash) || 0
-                    const totalVal = parseFloat(entry.totalAmount) || 0
-                    const cashExceeds = cashVal > totalVal && totalVal > 0
-                    return (
-                      <>
-                        <label className={labelCls}>
-                          Paid in Cash (₹)
-                          {cashExceeds && <span className="ml-1 text-[10px] text-red-500 font-semibold">exceeds total!</span>}
-                        </label>
-                        <input type="number" className={inputCls}
-                          style={{ borderColor: cashExceeds ? '#ef4444' : '#e5e7eb', background: cashExceeds ? '#fff5f5' : '' }}
+              </div>
+
+              {/* Paid in Cash — pick type first, then enter amount */}
+              {(() => {
+                const cashVal = parseFloat(entry.paidInCash) || 0
+                const totalVal = parseFloat(entry.totalAmount) || 0
+                const cashExceeds = cashVal > totalVal && totalVal > 0
+                const CASH_TYPES = [
+                  { label: 'CASH',       value: 'CASH' },
+                  { label: 'ATM\nWITHD', value: 'ATM WITHD' },
+                  { label: 'WITHD',      value: 'WITHD' },
+                  { label: 'TRANSF',     value: 'TRANSF' },
+                  { label: 'CC\nPAY',    value: 'CC PAY' },
+                  { label: 'CUST\nTRF',  value: 'CUST TRF' },
+                ]
+                return (
+                  <div>
+                    <label className={labelCls}>Paid in Cash</label>
+                    <div className="flex gap-1">
+                      {CASH_TYPES.map(ct => (
+                        <button
+                          key={ct.value}
+                          type="button"
+                          onClick={() => updateEntry(entry.id, { cashType: entry.cashType === ct.value ? '' : ct.value, paidInCash: entry.cashType === ct.value ? '' : entry.paidInCash })}
+                          className="flex-1 rounded text-center font-bold leading-tight transition-colors"
+                          style={{
+                            padding: '5px 2px',
+                            fontSize: 9,
+                            background: entry.cashType === ct.value ? '#facc15' : '#fef9c3',
+                            color: '#713f12',
+                            border: entry.cashType === ct.value ? '1.5px solid #eab308' : '1px solid #fde68a',
+                            whiteSpace: 'pre-line',
+                          }}
+                        >{ct.label}</button>
+                      ))}
+                    </div>
+                    {entry.cashType && (
+                      <div className="mt-1.5">
+                        <input
+                          type="number"
+                          className={inputCls}
+                          autoFocus
+                          style={{ borderColor: cashExceeds ? '#ef4444' : '#eab308', background: cashExceeds ? '#fff5f5' : '#fefce8' }}
                           value={entry.paidInCash}
                           onChange={e => {
                             const v = parseFloat(e.target.value) || 0
                             const total = parseFloat(entry.totalAmount) || 0
-                            if (total > 0 && v > total) {
-                              updateEntry(entry.id, { paidInCash: String(total) })
-                            } else {
-                              updateEntry(entry.id, { paidInCash: e.target.value })
-                            }
+                            updateEntry(entry.id, { paidInCash: total > 0 && v > total ? String(total) : e.target.value })
                           }}
-                          placeholder="0"
+                          placeholder={`${entry.cashType} amount (₹)`}
                         />
-                      </>
-                    )
-                  })()}
-                </div>
-              </div>
+                        {cashExceeds && <p className="text-[10px] text-red-500 mt-0.5 font-semibold">Exceeds total amount!</p>}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* Swap + Difference */}
               <div className="grid grid-cols-2 gap-2">
@@ -1489,8 +1649,9 @@ function EntryPageInner() {
       </div>
 
       {/* ── RIGHT PREVIEW 60% ── */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <div className="flex items-center justify-between mb-3">
+      <div className="flex-1 flex flex-col min-w-0 gap-3">
+
+        <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-[#1a1a1a]">
             Today&apos;s Entries
             <span className="ml-2 text-xs text-[#6b7280] font-normal">

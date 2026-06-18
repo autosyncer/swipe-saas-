@@ -25,6 +25,7 @@ export interface Customer {
   buyer_address?: string
   default_charge_pct: number
   outstanding_balance: number
+  notes?: string | null
   created_at?: string
 }
 

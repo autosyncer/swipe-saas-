@@ -99,19 +99,20 @@ function recalc(row: AcSheetRow): AcSheetRow {
   const avai_bal = Number(row.open_bal) + Number(row.bal_recd)
     + Number(row.same_day_bal_paytm) + Number(row.same_day_bal_finkeda) + Number(row.same_day_bal_qr)
     + Number(row.same_day_bal) + Number(row.trn_bal_recd)
-  const closing_bal = avai_bal - Number(row.atm_withd) - Number(row.withd) - Number(row.transf) - Number(row.cc_pay) - Number(row.cust_trf) - Number(row.charges)
+  // atm_withd, withd, transf, cc_pay, cust_trf are display-only — not deducted from closing_bal
+  const closing_bal = avai_bal - Number(row.charges)
   return { ...row, avai_bal, closing_bal }
 }
 
-// For existing DB rows: keep avai_bal as stored (may include transaction deductions),
-// only recompute closing_bal
+// For existing DB rows: keep avai_bal as stored (already reduced by swap transactions)
 function recalcExisting(row: AcSheetRow): AcSheetRow {
   const avai_bal = Number(row.avai_bal) || (
     Number(row.open_bal) + Number(row.bal_recd)
     + Number(row.same_day_bal_paytm) + Number(row.same_day_bal_finkeda) + Number(row.same_day_bal_qr)
     + Number(row.same_day_bal) + Number(row.trn_bal_recd)
   )
-  const closing_bal = avai_bal - Number(row.atm_withd) - Number(row.withd) - Number(row.transf) - Number(row.cc_pay) - Number(row.cust_trf) - Number(row.charges)
+  // atm_withd, withd, transf, cc_pay, cust_trf are display-only — not deducted from closing_bal
+  const closing_bal = avai_bal - Number(row.charges)
   return { ...row, avai_bal, closing_bal }
 }
 
@@ -138,9 +139,7 @@ export async function saveAcSheetCell(
   }
 
   const updatedRow = { ...row, [field]: value, avai_bal: new_avai_bal }
-  const closing_bal = new_avai_bal
-    - Number(updatedRow.atm_withd) - Number(updatedRow.withd) - Number(updatedRow.transf)
-    - Number(updatedRow.cc_pay) - Number(updatedRow.cust_trf) - Number(updatedRow.charges)
+  const closing_bal = new_avai_bal - Number(updatedRow.charges)
   const updated: AcSheetRow = { ...updatedRow, closing_bal }
 
   if (row.id) {
@@ -251,9 +250,7 @@ export async function deductTransactionFromAcSheet(transaction: {
     const newAvai = currentAvai - amountPerAccount
 
     if (existing) {
-      const closing_bal = newAvai
-        - Number(existing.atm_withd) - Number(existing.withd) - Number(existing.transf)
-        - Number(existing.cc_pay) - Number(existing.cust_trf) - Number(existing.charges)
+      const closing_bal = newAvai - Number(existing.charges || 0)
       await supabase.from('ac_sheet').update({ avai_bal: newAvai, closing_bal }).eq('id', existing.id)
     } else {
       const openBal = await getOpeningBalance(acc, date)
@@ -261,12 +258,100 @@ export async function deductTransactionFromAcSheet(transaction: {
         date, account_name: acc, open_bal: openBal, bal_recd: 0,
         same_day_bal_paytm: 0, same_day_bal_finkeda: 0, same_day_bal_qr: 0, same_day_bal: 0,
         trn_bal_recd: 0, avai_bal: newAvai,
-        atm_withd: 0, withd: 0, transf: 0, cc_pay: 0, cust_trf: 0, charges: 0, closing_bal: newAvai,
+        atm_withd: 0, withd: 0, transf: 0, cc_pay: 0, cust_trf: 0, charges: 0,
+        closing_bal: newAvai, // no deduction from display columns
       })
     }
     results.push({ account_name: acc, closing_bal: newAvai, low_balance: newAvai < LOW_BALANCE_THRESHOLD })
   }
   return results
+}
+
+// Add swap amount to account balance on release (card swap = money coming IN)
+export async function addSwapToAcSheet(params: {
+  date: string
+  account_name: string
+  swap_amount: number
+}): Promise<void> {
+  const accounts = (params.account_name || '').split(/[+,]/).map(a => a.trim()).filter(Boolean)
+  const amountPerAccount = accounts.length > 0 ? params.swap_amount / accounts.length : params.swap_amount
+
+  for (const acc of accounts) {
+    const { data: existing } = await supabase.from('ac_sheet').select('*').eq('account_name', acc).eq('date', params.date).maybeSingle()
+    if (existing) {
+      const newAvai = Number(existing.avai_bal || 0) + amountPerAccount
+      const closing_bal = newAvai - Number(existing.charges || 0)
+      await supabase.from('ac_sheet').update({ avai_bal: newAvai, closing_bal }).eq('id', existing.id)
+    } else {
+      const openBal = await getOpeningBalance(acc, params.date)
+      const newAvai = openBal + amountPerAccount
+      await supabase.from('ac_sheet').insert({
+        date: params.date, account_name: acc, open_bal: openBal,
+        bal_recd: amountPerAccount,
+        same_day_bal_paytm: 0, same_day_bal_finkeda: 0, same_day_bal_qr: 0, same_day_bal: 0,
+        trn_bal_recd: 0, avai_bal: newAvai,
+        atm_withd: 0, withd: 0, transf: 0, cc_pay: 0, cust_trf: 0, charges: 0,
+        closing_bal: newAvai,
+      })
+    }
+  }
+}
+
+const CASH_TYPE_COLUMN_MAP: Record<string, keyof AcSheetRow> = {
+  'ATM WITHD': 'atm_withd',
+  'WITHD':     'withd',
+  'TRANSF':    'transf',
+  'CC PAY':    'cc_pay',
+  'CUST TRF':  'cust_trf',
+}
+
+export async function updateAcSheetCashType(params: {
+  date: string
+  account_name: string
+  cashType: string
+  amount: number
+}): Promise<void> {
+  const col = CASH_TYPE_COLUMN_MAP[params.cashType]
+  if (!col) return
+
+  // Sum all transactions for this account+date+cashType to get accurate total
+  const colToType: Record<string, string> = {
+    atm_withd: 'ATM WITHD', withd: 'WITHD', transf: 'TRANSF', cc_pay: 'CC PAY', cust_trf: 'CUST TRF',
+  }
+  const { data: txns } = await supabase
+    .from('transactions')
+    .select('paid_in_cash, cash_type')
+    .eq('account_name', params.account_name)
+    .eq('date', params.date)
+    .eq('cash_type', colToType[col as string])
+
+  const totalForCol = (txns || []).reduce((sum: number, t: { paid_in_cash: number | null }) => sum + (Number(t.paid_in_cash) || 0), 0)
+
+  const { data: existing } = await supabase
+    .from('ac_sheet')
+    .select('*')
+    .eq('account_name', params.account_name)
+    .eq('date', params.date)
+    .maybeSingle()
+
+  if (existing) {
+    await supabase.from('ac_sheet').update({ [col]: totalForCol }).eq('id', existing.id)
+  } else {
+    const openBal = await getOpeningBalance(params.account_name, params.date)
+    await supabase.from('ac_sheet').insert({
+      date: params.date,
+      account_name: params.account_name,
+      open_bal: openBal, bal_recd: 0,
+      same_day_bal_paytm: 0, same_day_bal_finkeda: 0, same_day_bal_qr: 0, same_day_bal: 0,
+      trn_bal_recd: 0, avai_bal: openBal,
+      atm_withd: col === 'atm_withd' ? totalForCol : 0,
+      withd:     col === 'withd'     ? totalForCol : 0,
+      transf:    col === 'transf'    ? totalForCol : 0,
+      cc_pay:    col === 'cc_pay'    ? totalForCol : 0,
+      cust_trf:  col === 'cust_trf'  ? totalForCol : 0,
+      charges: 0, closing_bal: openBal,
+    })
+  }
 }
 
 export async function updateAcSheetFromTransaction(transaction: {

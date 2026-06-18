@@ -10,9 +10,12 @@ import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
 import { logAction } from '@/lib/audit-log'
 import { saveTransactionToStorage } from '@/lib/transaction-backup'
-import { createCCSheetRow, createChamundaSheetRow, createCustomerSheetRow } from '@/lib/sheet-helpers'
+import { createCCSheetRow, createChamundaSheetRow, createCustomerSheetRow, createCommissionSheetRow } from '@/lib/sheet-helpers'
 import AcSheetView from '@/components/sheets/AcSheetView'
 import ChamundaSheetView from '@/components/sheets/ChamundaSheetView'
+import CommissionSheetView from '@/components/sheets/CommissionSheetView'
+import SettlementSheetView from '@/components/sheets/SettlementSheetView'
+import ProfitSheetView from '@/components/sheets/ProfitSheetView'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface TxRow {
@@ -83,11 +86,14 @@ const COLS: ColDef[] = [
 ]
 
 const LEFT_SHEETS = [
-  { id:'daily_register',  label:'daily_register',  ready:true  },
-  { id:'ac_sheet',        label:'ac_sheet',        ready:true  },
-  { id:'cc_sheet',        label:'cc_sheet',        ready:true  },
-  { id:'chamunda_sheet',  label:'chamunda_sheet',  ready:true  },
-  { id:'customer_sheet',  label:'customer_sheet',  ready:true  },
+  { id:'daily_register',    label:'daily_register',    ready:true  },
+  { id:'ac_sheet',          label:'ac_sheet',          ready:true  },
+  { id:'cc_sheet',          label:'cc_sheet',          ready:true  },
+  { id:'chamunda_sheet',    label:'chamunda_sheet',    ready:true  },
+  { id:'customer_sheet',    label:'customer_sheet',    ready:true  },
+  { id:'commission_sheet',  label:'commission_sheet',  ready:true  },
+  { id:'settlement_sheet',  label:'settlement_sheet',  ready:true  },
+  { id:'profit_sheet',      label:'profit_sheet',      ready:true  },
 ]
 
 const PAGE_SIZES = [25, 50, 100, 200]
@@ -153,6 +159,10 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
     swapAmount:'', swapNames:[] as string[], difference:'', remarks:'PAID',
   })
   const [commType, setCommType] = useState('Inclusive')
+  const [commPayMode, setCommPayMode] = useState<'UPI'|'Cash'|'Net Banking'>('UPI')
+  const [commPayDetail, setCommPayDetail] = useState('')
+  const [upiAccounts, setUpiAccounts] = useState<{id:string;display_name:string;upi_id:string}[]>([])
+  const [netBankAccounts, setNetBankAccounts] = useState<{id:string;display_name:string;bank_name:string}[]>([])
   const [commAutoSource, setCommAutoSource] = useState<string|null>(null)
   const [nextSr, setNextSr] = useState(6752)
   const [submitting, setSubmitting] = useState(false)
@@ -178,6 +188,12 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
     })
     supabase.from('swipe_machines').select('machine_name').eq('status','Active').then(({data})=>{
       if (data && data.length > 0) setMachineNames(data.map((m:{machine_name:string})=>m.machine_name))
+    })
+    supabase.from('upi_accounts').select('id,display_name,upi_id').eq('status','Active').then(({data})=>{
+      if (data) setUpiAccounts(data as {id:string;display_name:string;upi_id:string}[])
+    })
+    supabase.from('net_banking_accounts').select('id,display_name,bank_name').eq('status','Active').then(({data})=>{
+      if (data) setNetBankAccounts(data as {id:string;display_name:string;bank_name:string}[])
     })
   },[])
 
@@ -304,6 +320,9 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
         createCCSheetRow(d)
         createChamundaSheetRow(d)
         createCustomerSheetRow(d, selectedCustomer?.id || null)
+        const payMode = commType !== 'Inclusive' ? commPayMode : null
+        const payDetail = commType !== 'Inclusive' ? commPayDetail : null
+        createCommissionSheetRow(d, payMode, payDetail)
         saveTransactionToStorage(d).catch(() => {})
         logAction({
           action: 'Transaction Created',
@@ -460,6 +479,43 @@ function InsertPanel({ onClose, onInserted }: { onClose:()=>void; onInserted:()=
               </select>
             </div>
           </div>
+          {/* Commission payment mode — shown for Exclusive only */}
+          {commType === 'Exclusive' && (
+            <div className="rounded-lg p-2.5" style={{border:'1px solid #dbeafe',background:'#eff6ff'}}>
+              <div className="text-[10px] font-semibold text-[#1e40af] mb-1.5">Commission Payment Mode</div>
+              <div className="flex gap-1.5 mb-2">
+                {(['UPI','Cash','Net Banking'] as const).map(m=>(
+                  <button key={m} type="button" onClick={()=>{setCommPayMode(m);setCommPayDetail('')}}
+                    className="flex-1 py-1 rounded text-[10px] font-medium border"
+                    style={{background:commPayMode===m?'#3ECF8E':'#fff',color:commPayMode===m?'#fff':'#374151',borderColor:commPayMode===m?'#3ECF8E':'#e5e7eb'}}>
+                    {m}
+                  </button>
+                ))}
+              </div>
+              {commPayMode === 'UPI' && upiAccounts.length > 0 && (
+                <select className={`${inCls} bg-white`} style={{borderColor:'#dbeafe'}} value={commPayDetail} onChange={e=>setCommPayDetail(e.target.value)}>
+                  <option value="">Select UPI...</option>
+                  {upiAccounts.map(u=><option key={u.id} value={u.display_name}>{u.display_name} ({u.upi_id})</option>)}
+                </select>
+              )}
+              {commPayMode === 'UPI' && upiAccounts.length === 0 && (
+                <div className="text-[10px] text-[#9ca3af]">No UPI accounts — add one in Commission Sheet → UPI tab</div>
+              )}
+              {commPayMode === 'Net Banking' && netBankAccounts.length > 0 && (
+                <select className={`${inCls} bg-white`} style={{borderColor:'#dbeafe'}} value={commPayDetail} onChange={e=>setCommPayDetail(e.target.value)}>
+                  <option value="">Select bank...</option>
+                  {netBankAccounts.map(b=><option key={b.id} value={b.display_name}>{b.display_name} — {b.bank_name}</option>)}
+                </select>
+              )}
+              {commPayMode === 'Net Banking' && netBankAccounts.length === 0 && (
+                <div className="text-[10px] text-[#9ca3af]">No bank accounts — add one in Commission Sheet → Net Banking tab</div>
+              )}
+              {commPayMode === 'Cash' && commType !== 'Deferred' && (
+                <div className="text-[10px] text-[#166534] mt-1">Cash will be recorded in Chamunda Sheet automatically.</div>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-3 gap-2">
             <div><label className={lbCls}>Total Amount *</label><input type="number" className={inCls} style={{borderColor:'#e5e7eb'}} value={form.totalAmount} onChange={e=>setForm(f=>({...f,totalAmount:e.target.value}))}/></div>
             <div><label className={lbCls}>Paid Amount</label><input type="number" className={inCls} style={{borderColor:'#e5e7eb'}} value={form.paidAmount} onChange={e=>setForm(f=>({...f,paidAmount:e.target.value}))}/></div>
@@ -2560,6 +2616,42 @@ export default function SheetsPage() {
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <TabBar/>
           <CustomerSheetView/>
+        </div>
+      </div>
+    )
+  }
+
+  if(activeSheet==='commission_sheet') {
+    return (
+      <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
+        <LeftPanel/>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <TabBar/>
+          <CommissionSheetView/>
+        </div>
+      </div>
+    )
+  }
+
+  if(activeSheet==='settlement_sheet') {
+    return (
+      <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
+        <LeftPanel/>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <TabBar/>
+          <SettlementSheetView/>
+        </div>
+      </div>
+    )
+  }
+
+  if(activeSheet==='profit_sheet') {
+    return (
+      <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
+        <LeftPanel/>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <TabBar/>
+          <ProfitSheetView/>
         </div>
       </div>
     )

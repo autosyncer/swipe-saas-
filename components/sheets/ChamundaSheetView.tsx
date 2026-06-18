@@ -218,11 +218,9 @@ export default function ChamundaSheetView() {
   const fetchAll = useCallback(async () => {
     setLoading(true)
     const [{ data: sheetData }, { data: l15Data }] = await Promise.all([
-      supabase.from('chamunda_sheet').select('*').order('date', { ascending: false }).order('sort_order', { ascending: true }),
-      supabase.from('l15_entries').select('*').order('date', { ascending: false }).order('created_at'),
+      supabase.from('chamunda_sheet').select('*').order('date', { ascending: false }).order('sort_order', { ascending: true }).limit(5000),
+      supabase.from('l15_entries').select('*').order('date', { ascending: false }).order('created_at').limit(2000),
     ])
-    const expRows = (sheetData || []).filter((r: ChamundaRow) => r.row_type === 'expense')
-    console.log('[fetchAll] total rows:', sheetData?.length, '| expense rows:', expRows.length, expRows.map((r: ChamundaRow) => ({ name: r.expense_name, amount: r.expense_amount, date: r.date })))
     setAllRows((sheetData as ChamundaRow[]) || [])
     setAllL15((l15Data as L15Entry[]) || [])
     setLoading(false)
@@ -356,15 +354,16 @@ export default function ChamundaSheetView() {
 
   // ── Expense popup ─────────────────────────────────────────────────────────────
   async function openExpensePopup() {
-    // Ensure today's sheet is initialized before opening
-    await fetchSheet(selectedDate)
+    // Always re-initialize to ensure expense rows exist for this date
+    // (safe to call multiple times — initialize uses IF NOT EXISTS per row)
+    await supabase.rpc('initialize_chamunda_sheet', { p_date: selectedDate })
+
     const [{ data: em }, { data: expRows }] = await Promise.all([
       supabase.from('expense_master').select('*').eq('is_active', true).order('sort_order'),
       supabase.from('chamunda_sheet').select('*').eq('date', selectedDate).eq('row_type', 'expense').order('sort_order'),
     ])
     setExpenseMaster((em as ExpenseMaster[]) || [])
     const freshExpRows = (expRows as ChamundaRow[]) || []
-    console.log('[openExpensePopup] freshExpRows:', freshExpRows.length, freshExpRows.map(r => ({ id: r.id, name: r.expense_name, amount: r.expense_amount })))
     setAllRows(prev => [...prev.filter(r => !(r.date === selectedDate && r.row_type === 'expense')), ...freshExpRows])
     const edits: Record<string, { amount: string; note: string }> = {}
     freshExpRows.forEach(r => {
@@ -377,14 +376,15 @@ export default function ChamundaSheetView() {
   async function saveExpenses() {
     setExpenseSaving(true)
     console.log('[saveExpenses] expenseEdits:', expenseEdits)
+    let saveError = false
     for (const [rowId, edit] of Object.entries(expenseEdits)) {
       const amt = parseFloat(edit.amount) || 0
-      console.log('[saveExpenses] updating rowId:', rowId, 'amount:', amt)
       const { error } = await supabase.from('chamunda_sheet')
         .update({ expense_amount: amt, expense_note: edit.note || null })
         .eq('id', rowId)
-      if (error) console.error('[saveExpenses] update error:', error.message)
+      if (error) { console.error('[saveExpenses] update error:', error.message); saveError = true }
     }
+    if (saveError) { showToast('Some expenses failed to save', 'error'); setExpenseSaving(false); return }
     await supabase.rpc('recalculate_chamunda_totals', { p_date: selectedDate })
 
     // Directly patch allRows with saved amounts so UI reflects immediately
@@ -470,17 +470,18 @@ export default function ChamundaSheetView() {
     dateGroups.forEach(([date, dateRows], gi) => {
       const dOpeningRows = dateRows.filter(r => ['opening_cash','opening_hdfc','opening_l15','opening_person'].includes(r.row_type))
       const dTxRows      = dateRows.filter(r => r.row_type === 'transaction')
-      const dExpRows     = dateRows.filter(r => r.row_type === 'expense' && ((r.expense_amount ?? 0) > 0 || r.expense_note))
+      const dExpRows     = dateRows.filter(r => r.row_type === 'expense' && (r.expense_amount ?? 0) > 0)
       const dL15         = allL15.filter(e => e.date === date)
 
       const machineMap = new Map<string, ChamundaRow[]>()
       dTxRows.forEach(r => { const k = r.machine_name||''; if(!machineMap.has(k)) machineMap.set(k,[]); machineMap.get(k)!.push(r) })
       const machineGroups = Array.from(machineMap.entries())
 
-      const totalCashIn     = dOpeningRows.reduce((s,r) => s+(Number(r.opening_amount)||0), 0)
-      const totalPaidInCash = dTxRows.reduce((s,r) => s+(Number(r.paid_in_cash)||0), 0)
+      const totalCashIn       = dOpeningRows.reduce((s,r) => s+(Number(r.opening_amount)||0), 0)
+      const totalPaidInCash   = dTxRows.reduce((s,r) => s+(Number(r.paid_in_cash)||0), 0)
+      const totalCashGpRecdXlsx = dTxRows.reduce((s,r) => s+(Number(r.cash_gp_recd)||0), 0)
       const totalExpensesXlsx = dateRows.filter(r => r.row_type === 'expense').reduce((s,r) => s+(Number(r.expense_amount)||0), 0)
-      const closingBalance  = totalCashIn + totalPaidInCash - totalExpensesXlsx
+      const closingBalance    = totalCashIn - totalPaidInCash + totalCashGpRecdXlsx - totalExpensesXlsx
 
       // spacer between date tables
       if (gi > 0) addSpacer(4)
@@ -682,7 +683,7 @@ export default function ChamundaSheetView() {
         ) : dateGroups.map(([date, dateRows]) => {
           const dOpeningRows = dateRows.filter(r => ['opening_cash','opening_hdfc','opening_l15','opening_person'].includes(r.row_type))
           const dTxRows = dateRows.filter(r => r.row_type === 'transaction')
-          const dExpRows = dateRows.filter(r => r.row_type === 'expense' && ((r.expense_amount ?? 0) > 0 || r.expense_note))
+          const dExpRows = dateRows.filter(r => r.row_type === 'expense')
           const dTotalRow = dateRows.find(r => r.row_type === 'total')
           const dL15 = allL15.filter(e => e.date === date)
           const machineMap = new Map<string, ChamundaRow[]>()
@@ -690,8 +691,9 @@ export default function ChamundaSheetView() {
           const dMachineGroups = Array.from(machineMap.entries())
           const totalCashIn = dOpeningRows.reduce((s,r) => s+(Number(r.opening_amount)||0), 0)
           const totalPaidInCash = dTxRows.reduce((s,r) => s+(Number(r.paid_in_cash)||0), 0)
+          const totalCashGpRecd = dTxRows.reduce((s,r) => s+(Number(r.cash_gp_recd)||0), 0)
           const totalExpenses = dateRows.filter(r => r.row_type === 'expense').reduce((s,r) => s+(Number(r.expense_amount)||0), 0)
-          const closingBalance = totalCashIn + totalPaidInCash - totalExpenses
+          const closingBalance = totalCashIn - totalPaidInCash + totalCashGpRecd - totalExpenses
           return (
             <table key={date} style={{ width: TBL_W, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <colgroup>
@@ -781,17 +783,39 @@ export default function ChamundaSheetView() {
                 ))}
                 {/* Gap */}
                 {[0,1,2,3,4].map(i => <tr key={`g2-${i}`}>{Array.from({length:NCOLS}).map((_,j)=><td key={j} style={{...CS,height:16}}></td>)}</tr>)}
-                {/* Expense rows */}
-                {dExpRows.map(row => (
-                  <tr key={row.id}>
-                    <td style={{...CS}}></td><td style={{...CS}}></td><td style={{...CS}}></td>
-                    <td style={{...CS}}>DR {row.expense_name||''}</td>
-                    <td style={{...CS,fontWeight:'bold'}}>{fmt(row.expense_amount)}</td>
-                    <td style={{...CS}}></td>
-                    <td style={{...CS,color:'#6b7280',fontSize:10}}>{row.expense_note||''}</td>
-                    <td style={{...CS}}></td><td style={{...CS}}></td><td style={{...CS}}></td>
-                  </tr>
-                ))}
+                {/* Expense rows — inline editable */}
+                {dExpRows.map(row => {
+                  const isEditingAmt  = editCell?.id === row.id && editCell?.field === 'expense_amount'
+                  const isEditingNote = editCell?.id === row.id && editCell?.field === 'expense_note'
+                  const flashAmt  = flashCells.has(`${row.id}__expense_amount`)
+                  return (
+                    <tr key={row.id} onMouseEnter={e=>(e.currentTarget.style.background='#FFFEF0')} onMouseLeave={e=>(e.currentTarget.style.background='#fff')}>
+                      <td style={{...CS}}></td><td style={{...CS}}></td><td style={{...CS}}></td>
+                      <td style={{...CS, color: (row.expense_amount ?? 0) > 0 ? '#000' : '#9ca3af'}}>DR {row.expense_name||''}</td>
+                      <td onClick={() => startEdit(row, 'expense_amount')}
+                        style={{...CS, fontWeight:'bold', cursor:'text', background: flashAmt ? '#bbf7d0' : (row.expense_amount ?? 0) > 0 ? '#fff' : '#fafafa', transition:'background 0.3s'}}>
+                        {isEditingAmt ? (
+                          <input ref={editInputRef} autoFocus type="number" value={editCell.value}
+                            onChange={e => setEditCell(ec => ec ? {...ec, value: e.target.value} : ec)}
+                            onBlur={commitEdit}
+                            onKeyDown={e => { if(e.key==='Enter'){e.preventDefault();commitEdit()} if(e.key==='Escape')setEditCell(null) }}
+                            style={{width:'100%',border:'none',outline:'2px solid #3ECF8E',padding:'2px 4px',fontSize:11,fontFamily:'Calibri,Arial,sans-serif',background:'#fff',boxSizing:'border-box',textAlign:'center'}} />
+                        ) : fmt(row.expense_amount)}
+                      </td>
+                      <td style={{...CS}}></td>
+                      <td onClick={() => startEdit(row, 'expense_note')} style={{...CS, color:'#6b7280', fontSize:10, cursor:'text'}}>
+                        {isEditingNote ? (
+                          <input ref={editInputRef} autoFocus value={editCell.value}
+                            onChange={e => setEditCell(ec => ec ? {...ec, value: e.target.value} : ec)}
+                            onBlur={commitEdit}
+                            onKeyDown={e => { if(e.key==='Enter'){e.preventDefault();commitEdit()} if(e.key==='Escape')setEditCell(null) }}
+                            style={{width:'100%',border:'none',outline:'2px solid #3ECF8E',padding:'2px 4px',fontSize:10,fontFamily:'Calibri,Arial,sans-serif',background:'#fff',boxSizing:'border-box'}} />
+                        ) : (row.expense_note || <span style={{color:'#d1d5db'}}>note…</span>)}
+                      </td>
+                      <td style={{...CS}}></td><td style={{...CS}}></td><td style={{...CS}}></td>
+                    </tr>
+                  )
+                })}
                 {/* Gap */}
                 {[0,1,2,3,4].map(i => <tr key={`g3-${i}`}>{Array.from({length:NCOLS}).map((_,j)=><td key={j} style={{...CS,height:16}}></td>)}</tr>)}
                 {/* Total row — always shown */}
