@@ -1291,6 +1291,7 @@ function EntryPageInner() {
                 const totalVal = parseFloat(entry.totalAmount) || 0
                 const totalPaid = entry.paymentModes.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)
                 const remaining = totalVal - totalPaid
+                const pending = remaining
                 const selectedModes = entry.paymentModes.map(p => p.mode)
 
                 const toggleMode = (mode: PaymentModeEntry['mode']) => {
