@@ -729,11 +729,12 @@ function CustomSheetView({ sheet }: { sheet: { id: string; label: string; themeC
 
   const loadRows = React.useCallback(async () => {
     if (txFieldsRef.current.length === 0) return
-    const selectStr = ['id', 'sr_no', 'date', ...txFieldsRef.current].join(', ')
+    const fields = Array.from(new Set(['id', 'sr_no', 'date', 'entry_type', ...txFieldsRef.current]))
+    const selectStr = fields.join(', ')
     const { data } = await supabase.from('transactions').select(selectStr).order('sr_no', { ascending: true })
     if (!data) return
     setRows((data as unknown as Record<string, unknown>[]).map((tx) => {
-      const row: Record<string, unknown> = { _id: tx.id, _sr: tx.sr_no, _date: tx.date }
+      const row: Record<string, unknown> = { _id: tx.id, _sr: tx.sr_no, _date: tx.date, _entry_type: tx.entry_type }
       sheet.columns.forEach(col => {
         const f = colMapRef.current[col.key]
         row[col.key] = f ? tx[f] : undefined
@@ -1003,11 +1004,12 @@ function CustomSheetView({ sheet }: { sheet: { id: string; label: string; themeC
               <tr>
                 <th style={{...CS_HDR_BASE,background:sheet.themeColor,width:48}}>#</th>
                 {sheet.columns.map(col => <th key={col.key} style={{...CS_HDR_BASE,background:sheet.themeColor,minWidth:130}}>{col.label}</th>)}
+                <th style={{...CS_HDR_BASE,background:sheet.themeColor,minWidth:110}}>TXN TYPE</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={sheet.columns.length+1} style={{...CS_CELL,textAlign:'center',padding:'24px',color:'#9ca3af'}}>
+                <tr><td colSpan={sheet.columns.length+2} style={{...CS_CELL,textAlign:'center',padding:'24px',color:'#9ca3af'}}>
                   No entries yet — submit a transaction from <strong>New Entry</strong> to populate this sheet.
                 </td></tr>
               ) : filtered.map((row, i) => (
@@ -1031,6 +1033,22 @@ function CustomSheetView({ sheet }: { sheet: { id: string; label: string; themeC
                       </td>
                     )
                   })}
+                  <td style={{...CS_CELL,textAlign:'center',cursor:'default',minWidth:110}}>
+                    {(() => {
+                      const et = String(row._entry_type ?? '')
+                      if (!et) return <span style={{color:'#d1d5db'}}>—</span>
+                      const isSwap = et === 'swap'
+                      return (
+                        <span style={{
+                          padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:700,
+                          background: isSwap ? '#dbeafe' : '#dcfce7',
+                          color: isSwap ? '#1e40af' : '#166534',
+                        }}>
+                          {isSwap ? 'Card Swap' : 'Card Refill'}
+                        </span>
+                      )
+                    })()}
+                  </td>
                 </tr>
               ))}
             </tbody>
