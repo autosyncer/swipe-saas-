@@ -729,7 +729,7 @@ function EntryPageInner() {
         commission_pct: comm,
         commission_amount: commAmt,
         commission_type: entry.commType,
-        bank_commission_pct: entry.mdrPct || 0,
+        ...(entry.mdrPct > 0 ? { bank_commission_pct: entry.mdrPct } : {}),
         entry_type: entryType,
         commodity_items: [],
       }
