@@ -15,6 +15,7 @@ interface PendingSwap {
   swap_name: string
   total_amount: number
   swap_amount: number
+  paid_amount: number | null
   paid_in_cash: number | null
   cash_type: string | null
   commission_pct: number
@@ -144,7 +145,7 @@ export default function NotificationsPage() {
 
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-[#1a1a1a]">Notifications</h1>
+          <h1 className="text-xl font-bold text-[#1a1a1a]">Settlement</h1>
           <p className="text-sm text-[#6b7280] mt-0.5">Card Swap transactions pending confirmation & release</p>
         </div>
         <button onClick={fetchPending} className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border"
@@ -192,6 +193,18 @@ export default function NotificationsPage() {
                   <div className="text-xs text-[#9ca3af]">Swap Amount</div>
                   <div className="text-base font-bold text-[#1a1a1a]">₹{fmt(txn.swap_amount || txn.total_amount)}</div>
                 </div>
+                {(() => {
+                  const swapAmt = txn.swap_amount || txn.total_amount
+                  const paidAmt = txn.paid_amount || 0
+                  const pendingAmt = swapAmt - paidAmt
+                  if (pendingAmt <= 0) return null
+                  return (
+                    <div className="text-right">
+                      <div className="text-xs text-[#9ca3af]">Pending Amount</div>
+                      <div className="text-base font-bold" style={{ color: '#dc2626' }}>₹{fmt(pendingAmt)}</div>
+                    </div>
+                  )
+                })()}
                 <button
                   onClick={() => handleRelease(txn)}
                   disabled={releasing === txn.id}

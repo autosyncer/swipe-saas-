@@ -25,7 +25,7 @@ const navGroups = [
     { icon: Receipt, label: 'Invoices', href: '/invoices', superOnly: false },
   ],
   [
-    { icon: BellRing, label: 'Notifications', href: '/notifications', superOnly: false },
+    { icon: BellRing, label: 'Settlement', href: '/notifications', superOnly: false },
     { icon: Bell, label: 'Reminders', href: '/reminders', superOnly: false },
     { icon: AlertTriangle, label: 'Risk Alerts', href: '/alerts', superOnly: false },
     { icon: BarChart2, label: 'Analytics', href: '/analytics', superOnly: false },
