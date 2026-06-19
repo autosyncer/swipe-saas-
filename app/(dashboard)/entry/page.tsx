@@ -1281,20 +1281,6 @@ function EntryPageInner() {
                         placeholder="0"
                       />
                     </div>
-                    {pending > 0 && totalVal > 0 && (
-                      <div className="col-span-2 flex items-center justify-between rounded-lg px-3 py-2"
-                        style={{ background: '#fef2f2', border: '1.5px solid #fecaca' }}>
-                        <span className="text-xs font-semibold" style={{ color: '#dc2626' }}>⏳ Pending Amount</span>
-                        <span className="text-sm font-bold" style={{ color: '#dc2626' }}>₹{fmt(pending)}</span>
-                      </div>
-                    )}
-                    {pending === 0 && totalPaid > 0 && (
-                      <div className="col-span-2 flex items-center justify-between rounded-lg px-3 py-2"
-                        style={{ background: '#f0fdf4', border: '1.5px solid #86efac' }}>
-                        <span className="text-xs font-semibold" style={{ color: '#16a34a' }}>✓ Fully Paid</span>
-                        <span className="text-sm font-bold" style={{ color: '#16a34a' }}>₹{fmt(totalPaid)}</span>
-                      </div>
-                    )}
                   </div>
                 )
               })()}
@@ -1409,6 +1395,22 @@ function EntryPageInner() {
                           </span>
                         ))}
                         <span className="text-[10px] font-bold" style={{ color: '#1a1a1a' }}>= ₹{fmt(totalPaid)}</span>
+                      </div>
+                    )}
+
+                    {/* Pending / Fully Paid banner */}
+                    {totalVal > 0 && totalPaid > 0 && pending > 0 && (
+                      <div className="mt-1.5 flex items-center justify-between rounded-lg px-3 py-2"
+                        style={{ background: '#fef2f2', border: '1.5px solid #fecaca' }}>
+                        <span className="text-xs font-semibold" style={{ color: '#dc2626' }}>⏳ Pending Amount</span>
+                        <span className="text-sm font-bold" style={{ color: '#dc2626' }}>₹{fmt(pending)}</span>
+                      </div>
+                    )}
+                    {totalVal > 0 && pending === 0 && totalPaid > 0 && (
+                      <div className="mt-1.5 flex items-center justify-between rounded-lg px-3 py-2"
+                        style={{ background: '#f0fdf4', border: '1.5px solid #86efac' }}>
+                        <span className="text-xs font-semibold" style={{ color: '#16a34a' }}>✓ Fully Paid</span>
+                        <span className="text-sm font-bold" style={{ color: '#16a34a' }}>₹{fmt(totalPaid)}</span>
                       </div>
                     )}
 
