@@ -66,6 +66,7 @@ export default function PaymentModeSheetView() {
   const [dateFilter, setDateFilter] = useState(() => new Date().toISOString().split('T')[0])
   const [showAll, setShowAll] = useState(false)
   const [modeFilter, setModeFilter] = useState<string>('ALL')
+  const [acctFilter, setAcctFilter] = useState<string>('ALL')
 
   const fetchRows = useCallback(async () => {
     setLoading(true)
@@ -105,10 +106,23 @@ export default function PaymentModeSheetView() {
     return found?.accountName || ''
   }
 
-  // Filter by selected mode
-  const displayRows = modeFilter === 'ALL'
-    ? rows
-    : rows.filter(r => getModeAmount(r, modeFilter) > 0)
+  // Get unique accounts for the selected mode (for sub-filter)
+  const accountsForMode: string[] = modeFilter === 'ALL' ? [] : Array.from(
+    new Set(
+      rows
+        .filter(r => getModeAmount(r, modeFilter) > 0)
+        .map(r => getModeAccount(r, modeFilter))
+        .filter(Boolean)
+    )
+  )
+
+  // Filter by selected mode then by account
+  const displayRows = rows
+    .filter(r => modeFilter === 'ALL' || getModeAmount(r, modeFilter) > 0)
+    .filter(r => {
+      if (modeFilter === 'ALL' || acctFilter === 'ALL') return true
+      return getModeAccount(r, modeFilter) === acctFilter
+    })
 
   // Totals
   const totals = ALL_MODES.reduce<Record<string, number>>((acc, m) => {
@@ -209,22 +223,51 @@ export default function PaymentModeSheetView() {
       <div className="flex items-center gap-2 px-4 py-2 flex-wrap border-b flex-shrink-0"
         style={{ borderColor: '#f3f4f6', background: '#fafafa' }}>
         {/* Filter buttons */}
-        <button onClick={() => setModeFilter('ALL')}
+        {/* Mode filter chips */}
+        <button onClick={() => { setModeFilter('ALL'); setAcctFilter('ALL') }}
           className="text-xs font-semibold px-2.5 py-1 rounded-full border"
           style={{ background: modeFilter === 'ALL' ? '#1a1a1a' : '#fff', color: modeFilter === 'ALL' ? '#fff' : '#374151', borderColor: modeFilter === 'ALL' ? '#1a1a1a' : '#e5e7eb' }}>
           All
         </button>
         {ALL_MODES.map(m => {
+          const t = rows.reduce((s, r) => s + getModeAmount(r, m), 0)
+          if (t === 0) return null
           const active = modeFilter === m
           const col = MODE_COLORS[m]
           return (
-            <button key={m} onClick={() => setModeFilter(m)}
+            <button key={m} onClick={() => { setModeFilter(m); setAcctFilter('ALL') }}
               className="text-xs font-semibold px-2.5 py-1 rounded-full border"
               style={{ background: active ? col.color : col.bg, color: active ? '#fff' : col.color, borderColor: col.color }}>
-              {m} {totals[m] > 0 ? `· ₹${totals[m].toLocaleString('en-IN')}` : ''}
+              {m} · ₹{t.toLocaleString('en-IN')}
             </button>
           )
         })}
+
+        {/* Account sub-filter — appears when a non-CASH mode is selected */}
+        {modeFilter !== 'ALL' && modeFilter !== 'CASH' && accountsForMode.length > 0 && (
+          <div className="flex items-center gap-1.5 ml-2 pl-2 border-l" style={{ borderColor: '#e5e7eb' }}>
+            <span className="text-[10px] text-[#9ca3af] font-medium">Account:</span>
+            <button onClick={() => setAcctFilter('ALL')}
+              className="text-[11px] font-semibold px-2 py-0.5 rounded-full border"
+              style={{ background: acctFilter === 'ALL' ? '#374151' : '#f3f4f6', color: acctFilter === 'ALL' ? '#fff' : '#374151', borderColor: '#e5e7eb' }}>
+              All
+            </button>
+            {accountsForMode.map(acct => {
+              const col = MODE_COLORS[modeFilter] || { bg: '#f3f4f6', color: '#374151' }
+              const active = acctFilter === acct
+              const acctTotal = rows
+                .filter(r => getModeAmount(r, modeFilter) > 0 && getModeAccount(r, modeFilter) === acct)
+                .reduce((s, r) => s + getModeAmount(r, modeFilter), 0)
+              return (
+                <button key={acct} onClick={() => setAcctFilter(acct)}
+                  className="text-[11px] font-semibold px-2 py-0.5 rounded-full border"
+                  style={{ background: active ? col.color : col.bg, color: active ? '#fff' : col.color, borderColor: col.color }}>
+                  {acct} · ₹{acctTotal.toLocaleString('en-IN')}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         <div className="ml-auto flex gap-2">
           <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
