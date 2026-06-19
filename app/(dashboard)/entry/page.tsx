@@ -14,6 +14,14 @@ import { saveTransactionToStorage } from '@/lib/transaction-backup'
 // Loaded dynamically from bank_account_master
 const ACCOUNT_OPTIONS: string[] = []
 
+interface PaymentModeEntry {
+  id: string
+  mode: 'CASH' | 'NEFT' | 'RTGS' | 'UPI' | 'GPAY' | 'PHONEPAY'
+  accountId: string
+  accountName: string
+  amount: string
+}
+
 interface AccountEntry {
   id: string
   accountName: string
@@ -23,14 +31,17 @@ interface AccountEntry {
   commPayMode: string
   commUpiId: string
   commNetBankId: string
-  cashType: string
+  paymentModes: PaymentModeEntry[]
   totalAmount: string
   paidAmount: string
-  paidInCash: string
   swapAmount: string
   difference: string
   remarks: string
   acctDropOpen: boolean
+}
+
+function makePayment(): PaymentModeEntry {
+  return { id: Math.random().toString(36).slice(2), mode: 'CASH', accountId: '', accountName: '', amount: '' }
 }
 
 function makeEntry(defaultCommPct = DEFAULT_COMM.toString()): AccountEntry {
@@ -38,8 +49,8 @@ function makeEntry(defaultCommPct = DEFAULT_COMM.toString()): AccountEntry {
     id: Math.random().toString(36).slice(2),
     accountName: '', machineName: '',
     commPct: defaultCommPct, commType: 'Inclusive', commPayMode: 'Cash',
-    commUpiId: '', commNetBankId: '', cashType: '',
-    totalAmount: '', paidAmount: '', paidInCash: '', swapAmount: '',
+    commUpiId: '', commNetBankId: '', paymentModes: [],
+    totalAmount: '', paidAmount: '', swapAmount: '',
     difference: '', remarks: 'PAID', acctDropOpen: false,
   }
 }
@@ -131,6 +142,9 @@ function EntryPageInner() {
   const [accountMachineMap, setAccountMachineMap] = useState<Record<string, string>>({})
   const [upiAccounts, setUpiAccounts] = useState<{ id: string; name: string; upi_id: string }[]>([])
   const [netBankAccounts, setNetBankAccounts] = useState<{ id: string; name: string; bank_name: string; account_number: string }[]>([])
+  const [paymentAccounts, setPaymentAccounts] = useState<{ id: string; name: string; type: string; detail: string }[]>([])
+  const [showAddPayAcct, setShowAddPayAcct] = useState<string | null>(null) // entry id
+  const [newPayAcctForm, setNewPayAcctForm] = useState({ name: '', type: 'GPAY' as PaymentModeEntry['mode'], detail: '' })
 
   // Right panel
   const [todayEntries, setTodayEntries] = useState<Transaction[]>([])
@@ -210,7 +224,15 @@ function EntryPageInner() {
     supabase.from('net_banking_accounts').select('id, name, bank_name, account_number').eq('is_active', true).order('name').then(({ data }) => {
       setNetBankAccounts((data as typeof netBankAccounts) || [])
     })
+    supabase.from('payment_accounts').select('id, name, type, detail').eq('status', 'Active').order('name').then(({ data }) => {
+      setPaymentAccounts((data as typeof paymentAccounts) || [])
+    })
   }, [])
+
+  const refreshPaymentAccounts = async () => {
+    const { data } = await supabase.from('payment_accounts').select('id, name, type, detail').eq('status', 'Active').order('name')
+    setPaymentAccounts((data as typeof paymentAccounts) || [])
+  }
 
   // ── Load active commodities ──
   useEffect(() => {
@@ -682,14 +704,16 @@ function EntryPageInner() {
       const total = parseFloat(entry.totalAmount) || 0
       const comm = parseFloat(entry.commPct) || DEFAULT_COMM
       const commAmt = Math.round(total * comm / 100)
+      const cashAmt = entry.paymentModes.filter(p => p.mode === 'CASH').reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)
       const payload = {
         date: today,
         customer_name: form.customerName.trim(),
         bank_card: form.bankCard.trim() || '',
         total_amount: total,
         paid_amount: parseFloat(entry.paidAmount) || 0,
-        ...(entry.paidInCash ? { paid_in_cash: parseFloat(entry.paidInCash) } : {}),
-        ...(entry.cashType ? { cash_type: entry.cashType } : {}),
+        ...(cashAmt > 0 ? { paid_in_cash: cashAmt } : {}),
+        cash_type: entry.paymentModes.length === 1 ? entry.paymentModes[0].mode : entry.paymentModes.length > 1 ? 'MULTI' : null,
+        payment_modes: entry.paymentModes.length > 0 ? entry.paymentModes.map(p => ({ mode: p.mode, accountId: p.accountId || null, accountName: p.accountName || null, amount: parseFloat(p.amount) || 0 })) : null,
         account_name: entry.accountName,
         swap_amount: parseFloat(entry.swapAmount) || 0,
         swap_name: entry.machineName,
@@ -732,12 +756,7 @@ function EntryPageInner() {
               const names = lowAccounts.map(r => `${r.account_name} (₹${r.closing_bal.toLocaleString('en-IN')})`).join(', ')
               setTimeout(() => setToast({ msg: `⚠️ Low Balance: ${names}`, type: 'error' }), 3500)
             }
-            if (entry.cashType && entry.cashType !== 'CASH' && entry.paidInCash) {
-              const cashAmt = parseFloat(entry.paidInCash) || 0
-              if (cashAmt > 0 && acctName) {
-                await updateAcSheetCashType({ date: data.date as string, account_name: acctName, cashType: entry.cashType, amount: cashAmt })
-              }
-            }
+            // No AC sheet column updates for new payment modes (NEFT/RTGS/UPI/GPAY/PHONEPAY tracked separately)
           } catch (e) { console.error('[AC Sheet update failed]', e) }
         })()
       }
@@ -1252,56 +1271,157 @@ function EntryPageInner() {
                 </div>
               </div>
 
-              {/* Paid in Cash — pick type first, then enter amount */}
+              {/* Payment Mode — multi-select (CASH, NEFT, RTGS, UPI, GPAY, PHONEPAY) */}
               {(() => {
-                const cashVal = parseFloat(entry.paidInCash) || 0
+                const MODES: PaymentModeEntry['mode'][] = ['CASH', 'NEFT', 'RTGS', 'UPI', 'GPAY', 'PHONEPAY']
                 const totalVal = parseFloat(entry.totalAmount) || 0
-                const cashExceeds = cashVal > totalVal && totalVal > 0
-                const CASH_TYPES = [
-                  { label: 'CASH',       value: 'CASH' },
-                  { label: 'ATM\nWITHD', value: 'ATM WITHD' },
-                  { label: 'WITHD',      value: 'WITHD' },
-                  { label: 'TRANSF',     value: 'TRANSF' },
-                  { label: 'CC\nPAY',    value: 'CC PAY' },
-                  { label: 'CUST\nTRF',  value: 'CUST TRF' },
-                ]
+                const totalPaid = entry.paymentModes.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)
+                const remaining = totalVal - totalPaid
+
+                const addPayment = () => {
+                  updateEntry(entry.id, { paymentModes: [...entry.paymentModes, makePayment()] })
+                }
+                const removePayment = (pid: string) => {
+                  updateEntry(entry.id, { paymentModes: entry.paymentModes.filter(p => p.id !== pid) })
+                }
+                const updatePayment = (pid: string, patch: Partial<PaymentModeEntry>) => {
+                  updateEntry(entry.id, { paymentModes: entry.paymentModes.map(p => p.id === pid ? { ...p, ...patch } : p) })
+                }
+
+                const saveNewPayAcct = async () => {
+                  if (!newPayAcctForm.name.trim()) return
+                  const { data } = await supabase.from('payment_accounts').insert({
+                    name: newPayAcctForm.name.trim(),
+                    type: newPayAcctForm.type,
+                    detail: newPayAcctForm.detail.trim(),
+                  }).select().single()
+                  if (data) {
+                    await refreshPaymentAccounts()
+                    setShowAddPayAcct(null)
+                    setNewPayAcctForm({ name: '', type: 'GPAY', detail: '' })
+                  }
+                }
+
                 return (
                   <div>
-                    <label className={labelCls}>Paid in Cash</label>
-                    <div className="flex gap-1">
-                      {CASH_TYPES.map(ct => (
-                        <button
-                          key={ct.value}
-                          type="button"
-                          onClick={() => updateEntry(entry.id, { cashType: entry.cashType === ct.value ? '' : ct.value, paidInCash: entry.cashType === ct.value ? '' : entry.paidInCash })}
-                          className="flex-1 rounded text-center font-bold leading-tight transition-colors"
-                          style={{
-                            padding: '5px 2px',
-                            fontSize: 9,
-                            background: entry.cashType === ct.value ? '#facc15' : '#fef9c3',
-                            color: '#713f12',
-                            border: entry.cashType === ct.value ? '1.5px solid #eab308' : '1px solid #fde68a',
-                            whiteSpace: 'pre-line',
-                          }}
-                        >{ct.label}</button>
-                      ))}
+                    <div className="flex items-center justify-between mb-1">
+                      <label className={labelCls} style={{ marginBottom: 0 }}>Payment Mode</label>
+                      {totalVal > 0 && (
+                        <span className="text-[10px] font-semibold" style={{ color: remaining < 0 ? '#dc2626' : remaining === 0 ? '#16a34a' : '#6b7280' }}>
+                          {remaining === 0 ? '✓ Fully paid' : remaining < 0 ? `Over by ₹${fmt(Math.abs(remaining))}` : `Remaining: ₹${fmt(remaining)}`}
+                        </span>
+                      )}
                     </div>
-                    {entry.cashType && (
-                      <div className="mt-1.5">
-                        <input
-                          type="number"
-                          className={inputCls}
-                          autoFocus
-                          style={{ borderColor: cashExceeds ? '#ef4444' : '#eab308', background: cashExceeds ? '#fff5f5' : '#fefce8' }}
-                          value={entry.paidInCash}
-                          onChange={e => {
-                            const v = parseFloat(e.target.value) || 0
-                            const total = parseFloat(entry.totalAmount) || 0
-                            updateEntry(entry.id, { paidInCash: total > 0 && v > total ? String(total) : e.target.value })
-                          }}
-                          placeholder={`${entry.cashType} amount (₹)`}
-                        />
-                        {cashExceeds && <p className="text-[10px] text-red-500 mt-0.5 font-semibold">Exceeds total amount!</p>}
+
+                    {/* Existing payment rows */}
+                    <div className="flex flex-col gap-1.5">
+                      {entry.paymentModes.map(pm => {
+                        const acctOptions = paymentAccounts.filter(a => a.type === pm.mode)
+                        return (
+                          <div key={pm.id} className="rounded-lg p-2" style={{ background: '#fafafa', border: '1px solid #e5e7eb' }}>
+                            {/* Mode selector */}
+                            <div className="flex gap-1 mb-1.5">
+                              {MODES.map(m => (
+                                <button key={m} type="button"
+                                  onClick={() => updatePayment(pm.id, { mode: m, accountId: '', accountName: '' })}
+                                  className="flex-1 rounded text-center font-bold transition-colors"
+                                  style={{
+                                    padding: '3px 2px', fontSize: 9,
+                                    background: pm.mode === m ? '#3ECF8E' : '#f3f4f6',
+                                    color: pm.mode === m ? '#fff' : '#374151',
+                                    border: pm.mode === m ? '1.5px solid #16a34a' : '1px solid #e5e7eb',
+                                  }}
+                                >{m}</button>
+                              ))}
+                            </div>
+
+                            {/* Account selector (non-CASH) */}
+                            {pm.mode !== 'CASH' && (
+                              <div className="mb-1.5">
+                                {acctOptions.length > 0 ? (
+                                  <select className={inputCls} style={{ borderColor: '#e5e7eb', fontSize: 11 }}
+                                    value={pm.accountId}
+                                    onChange={e => {
+                                      const acct = acctOptions.find(a => a.id === e.target.value)
+                                      updatePayment(pm.id, { accountId: e.target.value, accountName: acct?.name || '' })
+                                    }}>
+                                    <option value="">Select {pm.mode} account...</option>
+                                    {acctOptions.map(a => <option key={a.id} value={a.id}>{a.name}{a.detail ? ` (${a.detail})` : ''}</option>)}
+                                  </select>
+                                ) : (
+                                  <div className="text-[10px] text-[#9ca3af] italic">No {pm.mode} accounts — </div>
+                                )}
+                                <button type="button" onClick={() => setShowAddPayAcct(entry.id)}
+                                  className="text-[10px] font-semibold mt-0.5" style={{ color: '#3ECF8E' }}>
+                                  + Add {pm.mode} account
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Amount + remove */}
+                            <div className="flex gap-1.5 items-center">
+                              <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb', flex: 1 }}
+                                value={pm.amount} placeholder="Amount (₹)"
+                                onChange={e => updatePayment(pm.id, { amount: e.target.value })} />
+                              <button type="button" onClick={() => removePayment(pm.id)}
+                                style={{ color: '#ef4444', padding: '2px 4px', flexShrink: 0 }}>
+                                <X size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {/* Add payment button */}
+                    <button type="button" onClick={addPayment}
+                      className="mt-1.5 w-full flex items-center justify-center gap-1 rounded text-xs font-semibold py-1.5"
+                      style={{ background: '#f0fdf4', color: '#16a34a', border: '1px dashed #86efac' }}>
+                      <Plus size={12} /> Add Payment
+                    </button>
+
+                    {/* Total paid summary */}
+                    {entry.paymentModes.length > 1 && (
+                      <div className="mt-1 text-[10px] text-[#6b7280] flex gap-2 flex-wrap">
+                        {entry.paymentModes.map(p => p.amount ? (
+                          <span key={p.id} style={{ background: '#f3f4f6', padding: '1px 5px', borderRadius: 4 }}>
+                            {p.mode}: ₹{fmt(parseFloat(p.amount) || 0)}
+                          </span>
+                        ) : null)}
+                        <span className="font-bold" style={{ color: '#1a1a1a' }}>= ₹{fmt(totalPaid)}</span>
+                      </div>
+                    )}
+
+                    {/* Add account modal */}
+                    {showAddPayAcct === entry.id && (
+                      <div className="mt-2 rounded-lg p-2.5" style={{ background: '#fffde7', border: '1px solid #fde68a' }}>
+                        <div className="text-[10px] font-bold text-[#713f12] mb-1.5">Add Payment Account</div>
+                        <div className="flex gap-1 mb-1.5">
+                          {(['NEFT','RTGS','UPI','GPAY','PHONEPAY'] as const).map(t => (
+                            <button key={t} type="button"
+                              onClick={() => setNewPayAcctForm(f => ({ ...f, type: t }))}
+                              className="flex-1 rounded text-[9px] font-bold py-1"
+                              style={{ background: newPayAcctForm.type === t ? '#facc15' : '#fff', border: newPayAcctForm.type === t ? '1.5px solid #eab308' : '1px solid #fde68a', color: '#713f12' }}>
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                        <input className={inputCls} style={{ borderColor: '#fde68a', marginBottom: 4 }}
+                          placeholder="Account name (e.g. My GPay)"
+                          value={newPayAcctForm.name}
+                          onChange={e => setNewPayAcctForm(f => ({ ...f, name: e.target.value }))} />
+                        <input className={inputCls} style={{ borderColor: '#fde68a', marginBottom: 6 }}
+                          placeholder="UPI ID / Phone / Account No."
+                          value={newPayAcctForm.detail}
+                          onChange={e => setNewPayAcctForm(f => ({ ...f, detail: e.target.value }))} />
+                        <div className="flex gap-1.5">
+                          <button type="button" onClick={saveNewPayAcct}
+                            className="flex-1 py-1 rounded text-[11px] font-bold"
+                            style={{ background: '#3ECF8E', color: '#fff' }}>Save</button>
+                          <button type="button" onClick={() => setShowAddPayAcct(null)}
+                            className="flex-1 py-1 rounded text-[11px] font-bold"
+                            style={{ background: '#f3f4f6', color: '#374151' }}>Cancel</button>
+                        </div>
                       </div>
                     )}
                   </div>
