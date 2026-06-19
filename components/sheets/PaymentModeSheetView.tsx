@@ -372,9 +372,11 @@ export default function PaymentModeSheetView() {
                 <th style={HS}>MACHINE</th>
                 <th style={HS}>TOTAL AMT</th>
                 {activeMode === 'ALL'
-                  ? ALL_MODES.filter(m => modeTotals[m] > 0).map(m => (
-                      <th key={m} style={{ ...HS, background: MODE_COLORS[m].bg, color: MODE_COLORS[m].text }}>{m}</th>
-                    ))
+                  ? ALL_MODES.filter(m => modeTotals[m] > 0).flatMap(m => {
+                      const cols = [<th key={m} style={{ ...HS, background: MODE_COLORS[m].bg, color: MODE_COLORS[m].text }}>{m} AMT</th>]
+                      if (m !== 'CASH') cols.push(<th key={m + '_acct'} style={{ ...HS, background: MODE_COLORS[m].bg, color: MODE_COLORS[m].text, fontSize: 10 }}>{m} ACCOUNT</th>)
+                      return cols
+                    })
                   : <>
                       <th style={{ ...HS, background: MODE_COLORS[activeMode].bg, color: MODE_COLORS[activeMode].text }}>
                         {activeMode} AMT
@@ -407,14 +409,21 @@ export default function PaymentModeSheetView() {
                     <td style={{ ...CS, textAlign: 'right' }}>₹{total.toLocaleString('en-IN')}</td>
 
                     {activeMode === 'ALL'
-                      ? ALL_MODES.filter(m => modeTotals[m] > 0).map(m => {
+                      ? ALL_MODES.filter(m => modeTotals[m] > 0).flatMap(m => {
                           const amt = getModeAmount(r, m)
+                          const acct = getModeAccount(r, m)
                           const col = MODE_COLORS[m]
-                          return (
+                          const cells = [
                             <td key={m} style={{ ...CS, textAlign: 'right', background: amt > 0 ? col.bg : '#fff', color: amt > 0 ? col.text : '#d1d5db', fontWeight: amt > 0 ? 700 : 400 }}>
                               {amt > 0 ? fmt(amt) : '—'}
                             </td>
+                          ]
+                          if (m !== 'CASH') cells.push(
+                            <td key={m + '_acct'} style={{ ...CS, fontSize: 11, color: acct ? col.text : '#d1d5db', background: amt > 0 ? col.bg : '#fff' }}>
+                              {acct || '—'}
+                            </td>
                           )
+                          return cells
                         })
                       : <>
                           <td style={{ ...CS, textAlign: 'right', fontWeight: 700, color: MODE_COLORS[activeMode].text, background: MODE_COLORS[activeMode].bg }}>
@@ -452,11 +461,15 @@ export default function PaymentModeSheetView() {
                   ₹{displayTxTotal.toLocaleString('en-IN')}
                 </td>
                 {activeMode === 'ALL'
-                  ? ALL_MODES.filter(m => modeTotals[m] > 0).map(m => (
-                      <td key={m} style={{ ...CS, background: MODE_COLORS[m].bg, textAlign: 'right', fontWeight: 700, color: MODE_COLORS[m].text }}>
-                        ₹{displayRows.reduce((s, r) => s + getModeAmount(r, m), 0).toLocaleString('en-IN')}
-                      </td>
-                    ))
+                  ? ALL_MODES.filter(m => modeTotals[m] > 0).flatMap(m => {
+                      const cells = [
+                        <td key={m} style={{ ...CS, background: MODE_COLORS[m].bg, textAlign: 'right', fontWeight: 700, color: MODE_COLORS[m].text }}>
+                          ₹{displayRows.reduce((s, r) => s + getModeAmount(r, m), 0).toLocaleString('en-IN')}
+                        </td>
+                      ]
+                      if (m !== 'CASH') cells.push(<td key={m + '_acct'} style={{ ...CS, background: MODE_COLORS[m].bg }}></td>)
+                      return cells
+                    })
                   : <>
                       <td style={{ ...CS, background: MODE_COLORS[activeMode].bg, textAlign: 'right', fontWeight: 800, color: MODE_COLORS[activeMode].text }}>
                         ₹{displayModeTotal.toLocaleString('en-IN')}
