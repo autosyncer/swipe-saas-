@@ -33,6 +33,7 @@ interface TxRow {
   difference: number | null
   remarks: string
   commission_type?: string
+  entry_type?: string
 }
 
 interface ColDef { key: keyof TxRow | '_row'; label: string; width: number; align?: 'right'; editable?: boolean }
@@ -2001,13 +2002,13 @@ function SheetTable({dateGroups,flashCells,editCell,renderCell,startEdit,COLS}:S
     <table style={{width:TBL_W,borderCollapse:'collapse',tableLayout:'fixed'}}>
       <tbody>
         {dateGroups.length===0?(
-          <tr><td colSpan={11} style={{textAlign:'center',padding:'32px',color:'#9ca3af',border:'1px solid #e5e7eb'}}>No data for this month</td></tr>
+          <tr><td colSpan={12} style={{textAlign:'center',padding:'32px',color:'#9ca3af',border:'1px solid #e5e7eb'}}>No data for this month</td></tr>
         ):dateGroups.map(([date,drows],gi)=>(
           <React.Fragment key={date}>
-            {gi>0&&<tr><td colSpan={11} style={TBL_ES}/></tr>}
-            {gi>0&&<tr><td colSpan={11} style={TBL_ES}/></tr>}
+            {gi>0&&<tr><td colSpan={12} style={TBL_ES}/></tr>}
+            {gi>0&&<tr><td colSpan={12} style={TBL_ES}/></tr>}
             <tr>
-              <td colSpan={11} style={{...TBL_HS,textAlign:'center'}}>DATE {fmtDate(date)}</td>
+              <td colSpan={12} style={{...TBL_HS,textAlign:'center'}}>DATE {fmtDate(date)}</td>
             </tr>
             <tr>
               <th style={{...TBL_HS,width:TBL_CW.sr_no}}>SR NO</th>
@@ -2021,6 +2022,7 @@ function SheetTable({dateGroups,flashCells,editCell,renderCell,startEdit,COLS}:S
               <th style={{...TBL_HS,width:TBL_CW.swap_name}}>SWAP NAME</th>
               <th style={{...TBL_HS,width:TBL_CW.difference}}>DIFFERENCE</th>
               <th style={{...TBL_HS,width:TBL_CW.remarks}}>REMARKS</th>
+              <th style={{...TBL_HS,width:110}}>TXN TYPE</th>
             </tr>
             {drows.map((row,ri)=>(
               <tr key={row.id}
@@ -2064,6 +2066,16 @@ function SheetTable({dateGroups,flashCells,editCell,renderCell,startEdit,COLS}:S
                     const ct=row.commission_type||'Inclusive'
                     const style={Inclusive:{bg:'#d1fae5',color:'#065f46'},Exclusive:{bg:'#dbeafe',color:'#1e40af'},Deferred:{bg:'#fef9c3',color:'#854d0e'}}[ct]||{bg:'#f3f4f6',color:'#374151'}
                     return <span style={{background:style.bg,color:style.color,padding:'1px 6px',borderRadius:4,fontSize:10,fontWeight:600}}>{ct}</span>
+                  })()}
+                </td>
+                <td style={{...TBL_CS,width:110,textAlign:'center',cursor:'default'}}>
+                  {(()=>{
+                    const et = row.entry_type || ''
+                    if (!et) return <span style={{color:'#d1d5db',fontSize:10}}>—</span>
+                    const isSwap = et === 'swap'
+                    return <span style={{background:isSwap?'#dbeafe':'#dcfce7',color:isSwap?'#1e40af':'#166534',padding:'2px 8px',borderRadius:4,fontSize:11,fontWeight:700}}>
+                      {isSwap?'Card Swap':'Card Refill'}
+                    </span>
                   })()}
                 </td>
               </tr>
