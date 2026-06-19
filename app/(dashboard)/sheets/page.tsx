@@ -16,6 +16,7 @@ import ChamundaSheetView from '@/components/sheets/ChamundaSheetView'
 import CommissionSheetView from '@/components/sheets/CommissionSheetView'
 import SettlementSheetView from '@/components/sheets/SettlementSheetView'
 import ProfitSheetView from '@/components/sheets/ProfitSheetView'
+import PaymentModeSheetView from '@/components/sheets/PaymentModeSheetView'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface TxRow {
@@ -93,6 +94,7 @@ const LEFT_SHEETS = [
   { id:'customer_sheet',    label:'customer_sheet',    ready:true  },
   { id:'commission_sheet',  label:'commission_sheet',  ready:true  },
   { id:'settlement_sheet',  label:'settlement_sheet',  ready:true  },
+  { id:'payment_mode_sheet', label:'payment_mode_sheet', ready:true },
   { id:'profit_sheet',      label:'profit_sheet',      ready:true  },
 ]
 
@@ -2640,6 +2642,18 @@ export default function SheetsPage() {
         <div className="flex-1 flex flex-col overflow-hidden">
           <TabBar/>
           <SettlementSheetView/>
+        </div>
+      </div>
+    )
+  }
+
+  if(activeSheet==='payment_mode_sheet') {
+    return (
+      <div className="flex h-[calc(100vh-48px)] gap-0 -mx-6 -mt-4">
+        <LeftPanel/>
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <TabBar/>
+          <PaymentModeSheetView/>
         </div>
       </div>
     )
