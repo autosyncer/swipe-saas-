@@ -16,6 +16,7 @@ interface SettlementRow {
   swap_amount: number
   paid_in_cash: number | null
   cash_type: string | null
+  payment_modes: { mode: string; amount: number; accountName?: string | null }[] | null
   commission_pct: number
   commission_amount: number
   commission_type: string
@@ -208,8 +209,22 @@ export default function SettlementSheetView() {
                   <td style={{ ...CS }}>{r.swap_name || '—'}</td>
                   <td style={{ ...CS, textAlign: 'right', fontWeight: 500 }}>₹{fmt(r.total_amount)}</td>
                   <td style={{ ...CS, textAlign: 'right', fontWeight: 700, color: '#16a34a' }}>₹{fmt(r.swap_amount || r.total_amount)}</td>
-                  <td style={{ ...CS, textAlign: 'center' }}>
-                    {r.cash_type ? (
+                  <td style={{ ...CS }}>
+                    {r.payment_modes && r.payment_modes.length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        {r.payment_modes.map((pm, pi) => (
+                          <div key={pi} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <span style={{
+                              background: pm.mode === 'CASH' ? '#fef9c3' : pm.mode === 'GPAY' ? '#dbeafe' : pm.mode === 'PHONEPAY' ? '#ede9fe' : pm.mode === 'UPI' ? '#dcfce7' : pm.mode === 'NEFT' ? '#ffedd5' : '#fce7f3',
+                              color: pm.mode === 'CASH' ? '#713f12' : pm.mode === 'GPAY' ? '#1e40af' : pm.mode === 'PHONEPAY' ? '#5b21b6' : pm.mode === 'UPI' ? '#166534' : pm.mode === 'NEFT' ? '#9a3412' : '#9d174d',
+                              padding: '1px 5px', borderRadius: 3, fontWeight: 700, fontSize: 10, whiteSpace: 'nowrap',
+                            }}>{pm.mode}</span>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: '#374151' }}>₹{Number(pm.amount).toLocaleString('en-IN')}</span>
+                            {pm.accountName && <span style={{ fontSize: 10, color: '#6b7280' }}>({pm.accountName})</span>}
+                          </div>
+                        ))}
+                      </div>
+                    ) : r.cash_type ? (
                       <span style={{ background: '#fef9c3', color: '#713f12', padding: '1px 6px', borderRadius: 4, fontWeight: 600, fontSize: 10 }}>{r.cash_type}</span>
                     ) : '—'}
                   </td>
