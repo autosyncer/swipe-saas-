@@ -1271,135 +1271,126 @@ function EntryPageInner() {
                 </div>
               </div>
 
-              {/* Payment Mode — multi-select (CASH, NEFT, RTGS, UPI, GPAY, PHONEPAY) */}
+              {/* Payment Mode — chip toggle multi-select */}
               {(() => {
                 const MODES: PaymentModeEntry['mode'][] = ['CASH', 'NEFT', 'RTGS', 'UPI', 'GPAY', 'PHONEPAY']
                 const totalVal = parseFloat(entry.totalAmount) || 0
                 const totalPaid = entry.paymentModes.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)
                 const remaining = totalVal - totalPaid
+                const selectedModes = entry.paymentModes.map(p => p.mode)
 
-                const addPayment = () => {
-                  updateEntry(entry.id, { paymentModes: [...entry.paymentModes, makePayment()] })
+                const toggleMode = (mode: PaymentModeEntry['mode']) => {
+                  const existing = entry.paymentModes.find(p => p.mode === mode)
+                  if (existing) {
+                    // deselect — remove it
+                    updateEntry(entry.id, { paymentModes: entry.paymentModes.filter(p => p.mode !== mode) })
+                  } else {
+                    // select — add new row for this mode
+                    updateEntry(entry.id, { paymentModes: [...entry.paymentModes, { id: Math.random().toString(36).slice(2), mode, accountId: '', accountName: '', amount: '' }] })
+                  }
                 }
-                const removePayment = (pid: string) => {
-                  updateEntry(entry.id, { paymentModes: entry.paymentModes.filter(p => p.id !== pid) })
-                }
-                const updatePayment = (pid: string, patch: Partial<PaymentModeEntry>) => {
-                  updateEntry(entry.id, { paymentModes: entry.paymentModes.map(p => p.id === pid ? { ...p, ...patch } : p) })
+
+                const updatePayment = (mode: PaymentModeEntry['mode'], patch: Partial<PaymentModeEntry>) => {
+                  updateEntry(entry.id, { paymentModes: entry.paymentModes.map(p => p.mode === mode ? { ...p, ...patch } : p) })
                 }
 
                 const saveNewPayAcct = async () => {
                   if (!newPayAcctForm.name.trim()) return
                   const { data } = await supabase.from('payment_accounts').insert({
-                    name: newPayAcctForm.name.trim(),
-                    type: newPayAcctForm.type,
-                    detail: newPayAcctForm.detail.trim(),
+                    name: newPayAcctForm.name.trim(), type: newPayAcctForm.type, detail: newPayAcctForm.detail.trim(),
                   }).select().single()
-                  if (data) {
-                    await refreshPaymentAccounts()
-                    setShowAddPayAcct(null)
-                    setNewPayAcctForm({ name: '', type: 'GPAY', detail: '' })
-                  }
+                  if (data) { await refreshPaymentAccounts(); setShowAddPayAcct(null); setNewPayAcctForm({ name: '', type: 'GPAY', detail: '' }) }
                 }
 
                 return (
                   <div>
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center justify-between mb-1.5">
                       <label className={labelCls} style={{ marginBottom: 0 }}>Payment Mode</label>
-                      {totalVal > 0 && (
+                      {totalVal > 0 && totalPaid > 0 && (
                         <span className="text-[10px] font-semibold" style={{ color: remaining < 0 ? '#dc2626' : remaining === 0 ? '#16a34a' : '#6b7280' }}>
-                          {remaining === 0 ? '✓ Fully paid' : remaining < 0 ? `Over by ₹${fmt(Math.abs(remaining))}` : `Remaining: ₹${fmt(remaining)}`}
+                          {remaining === 0 ? '✓ Fully paid' : remaining < 0 ? `Over ₹${fmt(Math.abs(remaining))}` : `Rem: ₹${fmt(remaining)}`}
                         </span>
                       )}
                     </div>
 
-                    {/* Existing payment rows */}
+                    {/* Mode toggle chips */}
+                    <div className="flex gap-1 mb-2">
+                      {MODES.map(m => {
+                        const active = selectedModes.includes(m)
+                        return (
+                          <button key={m} type="button" onClick={() => toggleMode(m)}
+                            className="flex-1 rounded font-bold text-center transition-all"
+                            style={{
+                              padding: '5px 2px', fontSize: 9,
+                              background: active ? '#3ECF8E' : '#f3f4f6',
+                              color: active ? '#fff' : '#374151',
+                              border: active ? '1.5px solid #16a34a' : '1px solid #e5e7eb',
+                              boxShadow: active ? '0 1px 4px rgba(62,207,142,0.3)' : 'none',
+                            }}>
+                            {m}
+                          </button>
+                        )
+                      })}
+                    </div>
+
+                    {/* Amount + account inputs for each selected mode */}
                     <div className="flex flex-col gap-1.5">
                       {entry.paymentModes.map(pm => {
                         const acctOptions = paymentAccounts.filter(a => a.type === pm.mode)
                         return (
-                          <div key={pm.id} className="rounded-lg p-2" style={{ background: '#fafafa', border: '1px solid #e5e7eb' }}>
-                            {/* Mode selector */}
-                            <div className="flex gap-1 mb-1.5">
-                              {MODES.map(m => (
-                                <button key={m} type="button"
-                                  onClick={() => updatePayment(pm.id, { mode: m, accountId: '', accountName: '' })}
-                                  className="flex-1 rounded text-center font-bold transition-colors"
-                                  style={{
-                                    padding: '3px 2px', fontSize: 9,
-                                    background: pm.mode === m ? '#3ECF8E' : '#f3f4f6',
-                                    color: pm.mode === m ? '#fff' : '#374151',
-                                    border: pm.mode === m ? '1.5px solid #16a34a' : '1px solid #e5e7eb',
-                                  }}
-                                >{m}</button>
-                              ))}
-                            </div>
+                          <div key={pm.mode} className="rounded-lg px-2.5 py-2 flex flex-col gap-1.5"
+                            style={{ background: '#f0fdf4', border: '1.5px solid #86efac' }}>
+                            <div className="text-[10px] font-bold" style={{ color: '#166534' }}>{pm.mode}</div>
 
-                            {/* Account selector (non-CASH) */}
+                            {/* Account selector for non-CASH */}
                             {pm.mode !== 'CASH' && (
-                              <div className="mb-1.5">
-                                {acctOptions.length > 0 ? (
-                                  <select className={inputCls} style={{ borderColor: '#e5e7eb', fontSize: 11 }}
-                                    value={pm.accountId}
-                                    onChange={e => {
-                                      const acct = acctOptions.find(a => a.id === e.target.value)
-                                      updatePayment(pm.id, { accountId: e.target.value, accountName: acct?.name || '' })
-                                    }}>
-                                    <option value="">Select {pm.mode} account...</option>
-                                    {acctOptions.map(a => <option key={a.id} value={a.id}>{a.name}{a.detail ? ` (${a.detail})` : ''}</option>)}
-                                  </select>
-                                ) : (
-                                  <div className="text-[10px] text-[#9ca3af] italic">No {pm.mode} accounts — </div>
-                                )}
-                                <button type="button" onClick={() => setShowAddPayAcct(entry.id)}
-                                  className="text-[10px] font-semibold mt-0.5" style={{ color: '#3ECF8E' }}>
+                              <div>
+                                <select className={inputCls} style={{ borderColor: '#86efac', fontSize: 11 }}
+                                  value={pm.accountId}
+                                  onChange={e => {
+                                    const acct = acctOptions.find(a => a.id === e.target.value)
+                                    updatePayment(pm.mode, { accountId: e.target.value, accountName: acct?.name || '' })
+                                  }}>
+                                  <option value="">Select {pm.mode} account...</option>
+                                  {acctOptions.map(a => <option key={a.id} value={a.id}>{a.name}{a.detail ? ` · ${a.detail}` : ''}</option>)}
+                                </select>
+                                <button type="button" onClick={() => { setShowAddPayAcct(entry.id); setNewPayAcctForm(f => ({ ...f, type: pm.mode })) }}
+                                  className="text-[10px] font-semibold mt-0.5" style={{ color: '#16a34a' }}>
                                   + Add {pm.mode} account
                                 </button>
                               </div>
                             )}
 
-                            {/* Amount + remove */}
-                            <div className="flex gap-1.5 items-center">
-                              <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb', flex: 1 }}
-                                value={pm.amount} placeholder="Amount (₹)"
-                                onChange={e => updatePayment(pm.id, { amount: e.target.value })} />
-                              <button type="button" onClick={() => removePayment(pm.id)}
-                                style={{ color: '#ef4444', padding: '2px 4px', flexShrink: 0 }}>
-                                <X size={14} />
-                              </button>
-                            </div>
+                            {/* Amount */}
+                            <input type="number" className={inputCls}
+                              style={{ borderColor: '#86efac', background: '#fff' }}
+                              value={pm.amount} placeholder={`${pm.mode} amount (₹)`}
+                              onChange={e => updatePayment(pm.mode, { amount: e.target.value })} />
                           </div>
                         )
                       })}
                     </div>
 
-                    {/* Add payment button */}
-                    <button type="button" onClick={addPayment}
-                      className="mt-1.5 w-full flex items-center justify-center gap-1 rounded text-xs font-semibold py-1.5"
-                      style={{ background: '#f0fdf4', color: '#16a34a', border: '1px dashed #86efac' }}>
-                      <Plus size={12} /> Add Payment
-                    </button>
-
-                    {/* Total paid summary */}
-                    {entry.paymentModes.length > 1 && (
-                      <div className="mt-1 text-[10px] text-[#6b7280] flex gap-2 flex-wrap">
-                        {entry.paymentModes.map(p => p.amount ? (
-                          <span key={p.id} style={{ background: '#f3f4f6', padding: '1px 5px', borderRadius: 4 }}>
-                            {p.mode}: ₹{fmt(parseFloat(p.amount) || 0)}
+                    {/* Multi-mode total summary */}
+                    {entry.paymentModes.length > 1 && totalPaid > 0 && (
+                      <div className="mt-1.5 flex gap-1.5 flex-wrap items-center">
+                        {entry.paymentModes.filter(p => p.amount).map(p => (
+                          <span key={p.mode} className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                            style={{ background: '#d1fae5', color: '#065f46' }}>
+                            {p.mode} ₹{fmt(parseFloat(p.amount) || 0)}
                           </span>
-                        ) : null)}
-                        <span className="font-bold" style={{ color: '#1a1a1a' }}>= ₹{fmt(totalPaid)}</span>
+                        ))}
+                        <span className="text-[10px] font-bold" style={{ color: '#1a1a1a' }}>= ₹{fmt(totalPaid)}</span>
                       </div>
                     )}
 
-                    {/* Add account modal */}
+                    {/* Add account inline form */}
                     {showAddPayAcct === entry.id && (
                       <div className="mt-2 rounded-lg p-2.5" style={{ background: '#fffde7', border: '1px solid #fde68a' }}>
                         <div className="text-[10px] font-bold text-[#713f12] mb-1.5">Add Payment Account</div>
                         <div className="flex gap-1 mb-1.5">
                           {(['NEFT','RTGS','UPI','GPAY','PHONEPAY'] as const).map(t => (
-                            <button key={t} type="button"
-                              onClick={() => setNewPayAcctForm(f => ({ ...f, type: t }))}
+                            <button key={t} type="button" onClick={() => setNewPayAcctForm(f => ({ ...f, type: t }))}
                               className="flex-1 rounded text-[9px] font-bold py-1"
                               style={{ background: newPayAcctForm.type === t ? '#facc15' : '#fff', border: newPayAcctForm.type === t ? '1.5px solid #eab308' : '1px solid #fde68a', color: '#713f12' }}>
                               {t}
@@ -1407,20 +1398,16 @@ function EntryPageInner() {
                           ))}
                         </div>
                         <input className={inputCls} style={{ borderColor: '#fde68a', marginBottom: 4 }}
-                          placeholder="Account name (e.g. My GPay)"
-                          value={newPayAcctForm.name}
+                          placeholder="Name (e.g. My GPay)" value={newPayAcctForm.name}
                           onChange={e => setNewPayAcctForm(f => ({ ...f, name: e.target.value }))} />
                         <input className={inputCls} style={{ borderColor: '#fde68a', marginBottom: 6 }}
-                          placeholder="UPI ID / Phone / Account No."
-                          value={newPayAcctForm.detail}
+                          placeholder="UPI ID / Phone / Account No." value={newPayAcctForm.detail}
                           onChange={e => setNewPayAcctForm(f => ({ ...f, detail: e.target.value }))} />
                         <div className="flex gap-1.5">
                           <button type="button" onClick={saveNewPayAcct}
-                            className="flex-1 py-1 rounded text-[11px] font-bold"
-                            style={{ background: '#3ECF8E', color: '#fff' }}>Save</button>
+                            className="flex-1 py-1 rounded text-[11px] font-bold" style={{ background: '#3ECF8E', color: '#fff' }}>Save</button>
                           <button type="button" onClick={() => setShowAddPayAcct(null)}
-                            className="flex-1 py-1 rounded text-[11px] font-bold"
-                            style={{ background: '#f3f4f6', color: '#374151' }}>Cancel</button>
+                            className="flex-1 py-1 rounded text-[11px] font-bold" style={{ background: '#f3f4f6', color: '#374151' }}>Cancel</button>
                         </div>
                       </div>
                     )}
