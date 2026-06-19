@@ -65,7 +65,7 @@ const EMPTY_ROW_STYLE: React.CSSProperties = {
 
 // A=date | B=opening name | C=opening amt | D=DR name | E=paid in cash | F=swap | G=comm | H=swap firm(yellow) | I=TRF firm | J=cash/GP
 const COL_WIDTHS = { a: 70, b: 160, c: 100, d: 200, e: 100, f: 110, g: 80, h: 140, i: 120, j: 100 }
-const NCOLS = 10
+const NCOLS = 11
 const TBL_W = Object.values(COL_WIDTHS).reduce((s, v) => s + v, 0)
 
 function fmt(n: number | null | undefined) {
@@ -90,6 +90,7 @@ export default function ChamundaSheetView() {
   const [selectedDate, setSelectedDate] = useState(() => toDateStr(new Date()))
   const [allRows, setAllRows] = useState<ChamundaRow[]>([])
   const [allL15, setAllL15] = useState<L15Entry[]>([])
+  const [entryTypeMap, setEntryTypeMap] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
 
@@ -217,12 +218,16 @@ export default function ChamundaSheetView() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
-    const [{ data: sheetData }, { data: l15Data }] = await Promise.all([
+    const [{ data: sheetData }, { data: l15Data }, { data: txData }] = await Promise.all([
       supabase.from('chamunda_sheet').select('*').order('date', { ascending: false }).order('sort_order', { ascending: true }).limit(5000),
       supabase.from('l15_entries').select('*').order('date', { ascending: false }).order('created_at').limit(2000),
+      supabase.from('transactions').select('id,entry_type').limit(5000),
     ])
     setAllRows((sheetData as ChamundaRow[]) || [])
     setAllL15((l15Data as L15Entry[]) || [])
+    const etMap: Record<string, string> = {}
+    ;(txData || []).forEach((t: { id: string; entry_type: string }) => { etMap[t.id] = t.entry_type })
+    setEntryTypeMap(etMap)
     setLoading(false)
   }, [])
 
@@ -711,14 +716,14 @@ export default function ChamundaSheetView() {
                   <th style={{...HS}}>DT</th><th style={{...HS}}>OPENING BAL</th><th style={{...HS}}>Amount</th>
                   <th style={{...HS}}>NAME</th><th style={{...HS}}>Paid in Cash</th><th style={{...HS}}>Swap Amount</th>
                   <th style={{...HS}}>COMM</th><th style={{...HS}}>Swap Firm Name</th><th style={{...HS}}>TRF Firm Name</th>
-                  <th style={{...HS}}>Cash/GP Recd</th>
+                  <th style={{...HS}}>Cash/GP Recd</th><th style={{...HS}}>TXN TYPE</th>
                 </tr>
                 {/* Opening rows */}
                 {dOpeningRows.map(row => {
                   const isCash = row.row_type === 'opening_cash'
                   const isL15  = row.row_type === 'opening_l15'
                   const flash  = flashCells.has(`${row.id}__opening_amount`)
-                  const rest = Array.from({length:7}).map((_,i) => <td key={i} style={{...CS}}></td>)
+                  const rest = Array.from({length:8}).map((_,i) => <td key={i} style={{...CS}}></td>)
                   return (
                     <React.Fragment key={row.id}>
                       <tr>
@@ -742,7 +747,7 @@ export default function ChamundaSheetView() {
                           <td style={{...CS}}></td>
                           <td style={{...CS, textAlign:'center', fontSize:11}}>{e.customer_name}</td>
                           <td style={{...CS, textAlign:'center', fontSize:11}}>{e.amount?e.amount.toLocaleString('en-IN'):''}</td>
-                          {Array.from({length:7}).map((_,i) => <td key={i} style={{...CS}}></td>)}
+                          {Array.from({length:8}).map((_,i) => <td key={i} style={{...CS}}></td>)}
                         </tr>
                       ))}
                     </React.Fragment>
@@ -775,6 +780,22 @@ export default function ChamundaSheetView() {
                                 onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();commitEdit()}if(e.key==='Escape')setEditCell(null)}}
                                 style={{width:'100%',border:'none',outline:'2px solid #3ECF8E',padding:'2px 4px',fontSize:11,fontFamily:'Calibri,Arial,sans-serif',background:'#fff',boxSizing:'border-box',textAlign:'center'}} />
                             ) : fmt(row.cash_gp_recd)}
+                          </td>
+                          <td style={{...CS,textAlign:'center'}}>
+                            {(() => {
+                              const et = row.transaction_id ? entryTypeMap[row.transaction_id] : null
+                              if (!et) return <span style={{color:'#9ca3af',fontSize:10}}>—</span>
+                              const isSwap = et === 'swap'
+                              return (
+                                <span style={{
+                                  padding:'2px 6px', borderRadius:4, fontSize:10, fontWeight:700,
+                                  background: isSwap ? '#dbeafe' : '#dcfce7',
+                                  color: isSwap ? '#1e40af' : '#166534',
+                                }}>
+                                  {isSwap ? 'Card Swap' : 'Card Refill'}
+                                </span>
+                              )
+                            })()}
                           </td>
                         </tr>
                       )
