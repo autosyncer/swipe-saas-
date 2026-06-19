@@ -1251,25 +1251,53 @@ function EntryPageInner() {
                 )
               })()}
 
-              {/* Total + Paid */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className={labelCls}>Total Amount (₹)</label>
-                  <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                    value={entry.totalAmount}
-                    onChange={e => updateEntry(entry.id, { totalAmount: e.target.value })}
-                    placeholder="0"
-                  />
-                </div>
-                <div>
-                  <label className={labelCls}>Paid Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
-                  <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                    value={entry.paidAmount}
-                    onChange={e => updateEntry(entry.id, { paidAmount: e.target.value })}
-                    placeholder="0"
-                  />
-                </div>
-              </div>
+              {/* Total + Paid + Pending */}
+              {(() => {
+                const totalVal = parseFloat(entry.totalAmount) || 0
+                const totalPaid = entry.paymentModes.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)
+                const pending = totalVal - totalPaid
+                // Auto-sync paidAmount and remarks when payment modes change
+                if (totalPaid > 0 && entry.paidAmount !== String(totalPaid)) {
+                  setTimeout(() => updateEntry(entry.id, {
+                    paidAmount: String(totalPaid),
+                    remarks: pending > 0 ? 'PEND' : entry.remarks === 'PEND' ? 'PAID' : entry.remarks,
+                  }), 0)
+                }
+                return (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className={labelCls}>Total Amount (₹)</label>
+                      <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                        value={entry.totalAmount}
+                        onChange={e => updateEntry(entry.id, { totalAmount: e.target.value })}
+                        placeholder="0"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelCls}>Paid Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
+                      <input type="number" readOnly className={inputCls}
+                        style={{ borderColor: '#e5e7eb', background: '#f9fafb', cursor: 'default' }}
+                        value={totalPaid || entry.paidAmount}
+                        placeholder="0"
+                      />
+                    </div>
+                    {pending > 0 && totalVal > 0 && (
+                      <div className="col-span-2 flex items-center justify-between rounded-lg px-3 py-2"
+                        style={{ background: '#fef2f2', border: '1.5px solid #fecaca' }}>
+                        <span className="text-xs font-semibold" style={{ color: '#dc2626' }}>⏳ Pending Amount</span>
+                        <span className="text-sm font-bold" style={{ color: '#dc2626' }}>₹{fmt(pending)}</span>
+                      </div>
+                    )}
+                    {pending === 0 && totalPaid > 0 && (
+                      <div className="col-span-2 flex items-center justify-between rounded-lg px-3 py-2"
+                        style={{ background: '#f0fdf4', border: '1.5px solid #86efac' }}>
+                        <span className="text-xs font-semibold" style={{ color: '#16a34a' }}>✓ Fully Paid</span>
+                        <span className="text-sm font-bold" style={{ color: '#16a34a' }}>₹{fmt(totalPaid)}</span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* Payment Mode — chip toggle multi-select */}
               {(() => {
