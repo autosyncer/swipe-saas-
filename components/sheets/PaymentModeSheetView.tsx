@@ -77,7 +77,8 @@ export default function PaymentModeSheetView() {
     if (!showAll) q = q.eq('date', dateFilter)
     const { data } = await q
     const filtered = (data || []).filter((r: TxRow) =>
-      (r.payment_modes && r.payment_modes.length > 0) || r.paid_in_cash
+      (r.payment_modes && r.payment_modes.length > 0) ||
+      (r.paid_in_cash && Number(r.paid_in_cash) > 0)
     )
     setRows(filtered as TxRow[])
     setLoading(false)
