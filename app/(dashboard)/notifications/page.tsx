@@ -127,13 +127,43 @@ export default function SettlementPage() {
   }
 
   async function markAccountPaid(txn: Transaction) {
+    const today = new Date().toISOString().split('T')[0]
+    const total = Number(txn.total_amount || 0)
+
+    // 1. transactions
     const { error } = await supabase
       .from('transactions')
-      .update({ paid_amount: txn.total_amount, remarks: 'PAID', status: 'Paid' })
+      .update({ paid_amount: total, remarks: 'PAID', status: 'Paid' })
       .eq('id', txn.id)
     if (error) { showToast('Update failed: ' + error.message, 'error'); return }
+
+    // 2. chamunda_sheet
+    await supabase
+      .from('chamunda_sheet')
+      .update({ paid_amount: total })
+      .eq('transaction_id', txn.id)
+
+    // 3. customer_sheet
+    await supabase
+      .from('customer_sheet')
+      .update({ paid_amount: total, paid_remaining: 0, paid_date: today })
+      .eq('transaction_id', txn.id)
+
+    // 4. cc_sheet
+    await supabase
+      .from('cc_sheet')
+      .update({ status: 'Paid' })
+      .eq('transaction_id', txn.id)
+
+    // 5. commission_sheet — only update if Deferred (was Pending)
+    await supabase
+      .from('commission_sheet')
+      .update({ status: 'Paid', paid_date: today, paid_amount: Number(txn.total_amount) })
+      .eq('transaction_id', txn.id)
+      .eq('status', 'Pending')
+
     setAcctPending(prev => prev.filter(t => t.id !== txn.id))
-    showToast(`SR #${txn.sr_no} marked as fully paid`)
+    showToast(`SR #${txn.sr_no} marked as fully paid across all sheets`)
   }
 
   const swapSection = (
