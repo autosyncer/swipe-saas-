@@ -55,7 +55,7 @@ export default function ProfitSheetView() {
   const fetchRows = useCallback(async () => {
     setLoading(true)
 
-    // Fetch machines for MDR %
+    // Fetch machines for MDR % — used as fallback for old transactions without stored rate
     const { data: machines } = await supabase
       .from('swipe_machines')
       .select('machine_name, bank_commission_pct')
@@ -65,10 +65,10 @@ export default function ProfitSheetView() {
       mdrMap[m.machine_name] = Number(m.bank_commission_pct) || 0
     })
 
-    // Fetch transactions
+    // Fetch transactions — bank_commission_pct stores the rate at time of entry
     let query = supabase
       .from('transactions')
-      .select('id, sr_no, date, customer_name, bank_card, account_name, swap_name, total_amount, swap_amount, commission_pct, commission_amount, commission_type')
+      .select('id, sr_no, date, customer_name, bank_card, account_name, swap_name, total_amount, swap_amount, commission_pct, commission_amount, commission_type, bank_commission_pct')
       .order('date', { ascending: false })
       .order('sr_no', { ascending: true })
 
@@ -79,9 +79,11 @@ export default function ProfitSheetView() {
     const built: ProfitRow[] = (data || []).map((t: {
       id: string; sr_no: number; date: string; customer_name: string; bank_card: string;
       account_name: string; swap_name: string; total_amount: number; swap_amount: number;
-      commission_pct: number; commission_amount: number; commission_type: string
+      commission_pct: number; commission_amount: number; commission_type: string;
+      bank_commission_pct: number | null
     }) => {
-      const mdr_pct = mdrMap[t.swap_name] ?? 0
+      // Use stored rate if available, else fall back to current machine rate
+      const mdr_pct = t.bank_commission_pct != null ? Number(t.bank_commission_pct) : (mdrMap[t.swap_name] ?? 0)
       const total = Number(t.total_amount || 0)
       const mdr_charges = Math.round(total * mdr_pct / 100)
       const comm = Number(t.commission_amount || 0)

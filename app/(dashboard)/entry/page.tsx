@@ -26,6 +26,7 @@ interface AccountEntry {
   id: string
   accountName: string
   machineName: string
+  mdrPct: number
   commPct: string
   commType: string
   commPayMode: string
@@ -47,7 +48,7 @@ function makePayment(): PaymentModeEntry {
 function makeEntry(defaultCommPct = DEFAULT_COMM.toString()): AccountEntry {
   return {
     id: Math.random().toString(36).slice(2),
-    accountName: '', machineName: '',
+    accountName: '', machineName: '', mdrPct: 0,
     commPct: defaultCommPct, commType: 'Inclusive', commPayMode: 'Cash',
     commUpiId: '', commNetBankId: '', paymentModes: [],
     totalAmount: '', paidAmount: '', swapAmount: '',
@@ -357,9 +358,14 @@ function EntryPageInner() {
   function selectAccountForEntry(id: string, accountName: string) {
     const machineName = accountMachineMap[accountName] || ''
     supabase.from('bank_account_master').select('commission_pct').eq('account_name', accountName).maybeSingle()
-      .then(({ data }) => {
+      .then(async ({ data }) => {
         const commPct = data?.commission_pct ? String(data.commission_pct) : String(DEFAULT_COMM)
-        updateEntry(id, { accountName, machineName, commPct, acctDropOpen: false })
+        let mdrPct = 0
+        if (machineName) {
+          const { data: m } = await supabase.from('swipe_machines').select('bank_commission_pct').eq('machine_name', machineName).maybeSingle()
+          mdrPct = Number(m?.bank_commission_pct || 0)
+        }
+        updateEntry(id, { accountName, machineName, mdrPct, commPct, acctDropOpen: false })
       })
     getAccountCurrentBalance(accountName, today).then(bal => {
       setAccountBalances(prev => ({ ...prev, [id]: bal }))
@@ -723,6 +729,7 @@ function EntryPageInner() {
         commission_pct: comm,
         commission_amount: commAmt,
         commission_type: entry.commType,
+        bank_commission_pct: entry.mdrPct || 0,
         entry_type: entryType,
         commodity_items: [],
       }
@@ -1120,7 +1127,14 @@ function EntryPageInner() {
                 <label className={labelCls}>Swipe Machine</label>
                 <input className={inputCls} style={{ borderColor: '#e5e7eb' }}
                   value={entry.machineName}
-                  onChange={e => updateEntry(entry.id, { machineName: e.target.value })}
+                  onChange={async e => {
+                    const machineName = e.target.value
+                    updateEntry(entry.id, { machineName })
+                    if (machineName) {
+                      const { data: m } = await supabase.from('swipe_machines').select('bank_commission_pct').eq('machine_name', machineName).maybeSingle()
+                      if (m) updateEntry(entry.id, { mdrPct: Number(m.bank_commission_pct || 0) })
+                    }
+                  }}
                   placeholder="Auto-filled from account..."
                 />
               </div>
