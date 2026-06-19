@@ -65,8 +65,6 @@ export default function PaymentModeSheetView() {
   const [loading, setLoading] = useState(true)
   const [dateFilter, setDateFilter] = useState(() => new Date().toISOString().split('T')[0])
   const [showAll, setShowAll] = useState(false)
-  const [modeFilter, setModeFilter] = useState<string>('ALL')
-  const [acctFilter, setAcctFilter] = useState<string>('ALL')
 
   const fetchRows = useCallback(async () => {
     setLoading(true)
@@ -79,7 +77,6 @@ export default function PaymentModeSheetView() {
     if (!showAll) q = q.eq('date', dateFilter)
 
     const { data } = await q
-    // Only show rows that have at least one payment mode OR paid_in_cash
     const filtered = (data || []).filter((r: TxRow) =>
       (r.payment_modes && r.payment_modes.length > 0) || r.paid_in_cash
     )
@@ -89,13 +86,11 @@ export default function PaymentModeSheetView() {
 
   useEffect(() => { fetchRows() }, [fetchRows])
 
-  // Get payment amount for a specific mode from a row
   const getModeAmount = (row: TxRow, mode: string): number => {
     if (row.payment_modes && row.payment_modes.length > 0) {
       const found = row.payment_modes.find(p => p.mode === mode)
       return found ? Number(found.amount) : 0
     }
-    // Fallback: if no payment_modes JSON, use paid_in_cash for CASH
     if (mode === 'CASH') return Number(row.paid_in_cash || 0)
     return 0
   }
@@ -106,38 +101,17 @@ export default function PaymentModeSheetView() {
     return found?.accountName || ''
   }
 
-  // Get unique accounts for the selected mode (for sub-filter)
-  const accountsForMode: string[] = modeFilter === 'ALL' ? [] : Array.from(
-    new Set(
-      rows
-        .filter(r => getModeAmount(r, modeFilter) > 0)
-        .map(r => getModeAccount(r, modeFilter))
-        .filter(Boolean)
-    )
-  )
-
-  // Filter by selected mode then by account
-  const displayRows = rows
-    .filter(r => modeFilter === 'ALL' || getModeAmount(r, modeFilter) > 0)
-    .filter(r => {
-      if (modeFilter === 'ALL' || acctFilter === 'ALL') return true
-      return getModeAccount(r, modeFilter) === acctFilter
-    })
-
-  // Totals
+  // Only show mode columns that have at least one non-zero value
   const totals = ALL_MODES.reduce<Record<string, number>>((acc, m) => {
-    acc[m] = displayRows.reduce((s, r) => s + getModeAmount(r, m), 0)
+    acc[m] = rows.reduce((s, r) => s + getModeAmount(r, m), 0)
     return acc
   }, {})
-
-  // Only show columns that have data
   const activeModes = ALL_MODES.filter(m => totals[m] > 0)
   const activeNonCash = activeModes.filter(m => m !== 'CASH')
-  const totalPaid = displayRows.reduce((s, r) => s + (Number(r.paid_amount) || 0), 0)
-  const totalPending = displayRows.reduce((s, r) => {
-    const total = Number(r.total_amount || 0)
-    const paid = Number(r.paid_amount || 0)
-    return s + Math.max(0, total - paid)
+
+  const totalPaid = rows.reduce((s, r) => s + (Number(r.paid_amount) || 0), 0)
+  const totalPending = rows.reduce((s, r) => {
+    return s + Math.max(0, Number(r.total_amount || 0) - Number(r.paid_amount || 0))
   }, 0)
 
   async function exportExcel() {
@@ -149,8 +123,8 @@ export default function PaymentModeSheetView() {
       c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } }
     }
     const headers = ['SR', 'DATE', 'CUSTOMER', 'BANK CARD', 'ACCOUNT', 'MACHINE', 'TOTAL AMT', 'PAID AMT', 'PENDING',
-      ...ALL_MODES.map(m => `${m} AMT`),
-      ...ALL_MODES.filter(m => m !== 'CASH').map(m => `${m} ACCOUNT`),
+      ...activeModes.map(m => `${m} AMT`),
+      ...activeNonCash.map(m => `${m} ACCOUNT`),
       'REMARKS']
     const hdr = ws.addRow(headers)
     hdr.eachCell(c => {
@@ -159,14 +133,14 @@ export default function PaymentModeSheetView() {
       c.alignment = { horizontal: 'center', vertical: 'middle' }
       border(c)
     })
-    displayRows.forEach((r, i) => {
+    rows.forEach((r, i) => {
       const total = Number(r.total_amount || 0)
       const paid = Number(r.paid_amount || 0)
       const dr = ws.addRow([
         r.sr_no, r.date, r.customer_name, r.bank_card || '', r.account_name, r.swap_name || '',
         total, paid, Math.max(0, total - paid),
-        ...ALL_MODES.map(m => getModeAmount(r, m) || ''),
-        ...ALL_MODES.filter(m => m !== 'CASH').map(m => getModeAccount(r, m)),
+        ...activeModes.map(m => getModeAmount(r, m) || ''),
+        ...activeNonCash.map(m => getModeAccount(r, m)),
         r.remarks || '',
       ])
       dr.eachCell({ includeEmpty: true }, c => {
@@ -175,8 +149,7 @@ export default function PaymentModeSheetView() {
         border(c)
       })
     })
-    // Total row
-    const tot = ws.addRow(['', '', '', '', '', 'TOTAL', displayRows.reduce((s, r) => s + Number(r.total_amount || 0), 0), totalPaid, totalPending, ...ALL_MODES.map(m => totals[m] || ''), ...ALL_MODES.filter(m => m !== 'CASH').map(() => ''), ''])
+    const tot = ws.addRow(['', '', '', '', '', 'TOTAL', rows.reduce((s, r) => s + Number(r.total_amount || 0), 0), totalPaid, totalPending, ...activeModes.map(m => totals[m] || ''), ...activeNonCash.map(() => ''), ''])
     tot.eachCell({ includeEmpty: true }, c => {
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } }
       c.font = { bold: true, name: 'Calibri', size: 11 }
@@ -199,11 +172,28 @@ export default function PaymentModeSheetView() {
           <span className="text-sm font-bold text-[#1a1a1a] uppercase tracking-wide">Payment Mode Sheet</span>
           <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
             style={{ background: '#eff6ff', color: '#1d4ed8' }}>
-            {displayRows.length} entries
+            {rows.length} entries
           </span>
+          {/* Mode totals summary */}
+          {activeModes.map(m => (
+            <span key={m} className="text-xs font-semibold px-2.5 py-0.5 rounded-full"
+              style={{ background: MODE_COLORS[m].bg, color: MODE_COLORS[m].color, border: `1px solid ${MODE_COLORS[m].color}40` }}>
+              {m} · ₹{totals[m].toLocaleString('en-IN')}
+            </span>
+          ))}
         </div>
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-[#6b7280] cursor-pointer">
+          <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
+            style={{ background: '#f0fdf4', color: '#166534', border: '1px solid #86efac' }}>
+            Paid: ₹{totalPaid.toLocaleString('en-IN')}
+          </span>
+          {totalPending > 0 && (
+            <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
+              style={{ background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca' }}>
+              Pending: ₹{totalPending.toLocaleString('en-IN')}
+            </span>
+          )}
+          <label className="flex items-center gap-1.5 text-xs text-[#6b7280] cursor-pointer ml-2">
             <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} />
             All dates
           </label>
@@ -219,75 +209,11 @@ export default function PaymentModeSheetView() {
         </div>
       </div>
 
-      {/* Mode filter chips + summary */}
-      <div className="flex items-center gap-2 px-4 py-2 flex-wrap border-b flex-shrink-0"
-        style={{ borderColor: '#f3f4f6', background: '#fafafa' }}>
-        {/* Filter buttons */}
-        {/* Mode filter chips */}
-        <button onClick={() => { setModeFilter('ALL'); setAcctFilter('ALL') }}
-          className="text-xs font-semibold px-2.5 py-1 rounded-full border"
-          style={{ background: modeFilter === 'ALL' ? '#1a1a1a' : '#fff', color: modeFilter === 'ALL' ? '#fff' : '#374151', borderColor: modeFilter === 'ALL' ? '#1a1a1a' : '#e5e7eb' }}>
-          All
-        </button>
-        {ALL_MODES.map(m => {
-          const t = rows.reduce((s, r) => s + getModeAmount(r, m), 0)
-          if (t === 0) return null
-          const active = modeFilter === m
-          const col = MODE_COLORS[m]
-          return (
-            <button key={m} onClick={() => { setModeFilter(m); setAcctFilter('ALL') }}
-              className="text-xs font-semibold px-2.5 py-1 rounded-full border"
-              style={{ background: active ? col.color : col.bg, color: active ? '#fff' : col.color, borderColor: col.color }}>
-              {m} · ₹{t.toLocaleString('en-IN')}
-            </button>
-          )
-        })}
-
-        {/* Account sub-filter — appears when a non-CASH mode is selected */}
-        {modeFilter !== 'ALL' && modeFilter !== 'CASH' && accountsForMode.length > 0 && (
-          <div className="flex items-center gap-1.5 ml-2 pl-2 border-l" style={{ borderColor: '#e5e7eb' }}>
-            <span className="text-[10px] text-[#9ca3af] font-medium">Account:</span>
-            <button onClick={() => setAcctFilter('ALL')}
-              className="text-[11px] font-semibold px-2 py-0.5 rounded-full border"
-              style={{ background: acctFilter === 'ALL' ? '#374151' : '#f3f4f6', color: acctFilter === 'ALL' ? '#fff' : '#374151', borderColor: '#e5e7eb' }}>
-              All
-            </button>
-            {accountsForMode.map(acct => {
-              const col = MODE_COLORS[modeFilter] || { bg: '#f3f4f6', color: '#374151' }
-              const active = acctFilter === acct
-              const acctTotal = rows
-                .filter(r => getModeAmount(r, modeFilter) > 0 && getModeAccount(r, modeFilter) === acct)
-                .reduce((s, r) => s + getModeAmount(r, modeFilter), 0)
-              return (
-                <button key={acct} onClick={() => setAcctFilter(acct)}
-                  className="text-[11px] font-semibold px-2 py-0.5 rounded-full border"
-                  style={{ background: active ? col.color : col.bg, color: active ? '#fff' : col.color, borderColor: col.color }}>
-                  {acct} · ₹{acctTotal.toLocaleString('en-IN')}
-                </button>
-              )
-            })}
-          </div>
-        )}
-
-        <div className="ml-auto flex gap-2">
-          <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
-            style={{ background: '#f0fdf4', color: '#166534', border: '1px solid #86efac' }}>
-            Paid: ₹{totalPaid.toLocaleString('en-IN')}
-          </span>
-          {totalPending > 0 && (
-            <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
-              style={{ background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca' }}>
-              Pending: ₹{totalPending.toLocaleString('en-IN')}
-            </span>
-          )}
-        </div>
-      </div>
-
       {/* Table */}
       <div className="flex-1 overflow-auto">
         {loading ? (
           <div className="flex items-center justify-center h-32 text-sm text-[#9ca3af]">Loading...</div>
-        ) : displayRows.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className="flex items-center justify-center h-32 text-sm text-[#9ca3af]">No payment entries for this date</div>
         ) : (
           <table style={{ borderCollapse: 'collapse', width: '100%' }}>
@@ -312,7 +238,7 @@ export default function PaymentModeSheetView() {
               </tr>
             </thead>
             <tbody>
-              {displayRows.map((r, i) => {
+              {rows.map((r, i) => {
                 const total = Number(r.total_amount || 0)
                 const paid = Number(r.paid_amount || 0)
                 const pending = Math.max(0, total - paid)
@@ -359,8 +285,8 @@ export default function PaymentModeSheetView() {
               })}
               {/* Total row */}
               <tr style={{ background: '#d1fae5', fontWeight: 700, borderTop: '2px solid #000' }}>
-                <td colSpan={6} style={{ ...CS, textAlign: 'right', fontWeight: 700, background: '#d1fae5' }}>TOTAL ({displayRows.length})</td>
-                <td style={{ ...CS, textAlign: 'right', background: '#d1fae5' }}>₹{displayRows.reduce((s, r) => s + Number(r.total_amount || 0), 0).toLocaleString('en-IN')}</td>
+                <td colSpan={6} style={{ ...CS, textAlign: 'right', fontWeight: 700, background: '#d1fae5' }}>TOTAL ({rows.length})</td>
+                <td style={{ ...CS, textAlign: 'right', background: '#d1fae5' }}>₹{rows.reduce((s, r) => s + Number(r.total_amount || 0), 0).toLocaleString('en-IN')}</td>
                 <td style={{ ...CS, textAlign: 'right', color: '#16a34a', background: '#d1fae5' }}>₹{totalPaid.toLocaleString('en-IN')}</td>
                 <td style={{ ...CS, textAlign: 'right', color: '#dc2626', background: '#d1fae5' }}>{totalPending > 0 ? `₹${totalPending.toLocaleString('en-IN')}` : '—'}</td>
                 {activeModes.map(m => (
