@@ -10,8 +10,8 @@ interface KPIData {
   totalCommission: number
   totalOutstanding: number
   txnCount: number
-  avgTicket: number
-  collectionRate: number
+  commissionCollectedToday: number
+  amountToSettle: number
 }
 
 interface StatusEntry {
@@ -215,8 +215,8 @@ export function PrintableReport({ data, filters, onClose }: Props) {
                 { label: 'Total Commission', value: fc(data.kpis.totalCommission), sub: 'Our earnings' },
                 { label: 'Outstanding Balance', value: fc(data.kpis.totalOutstanding), sub: 'Pending collections' },
                 { label: 'Transactions', value: String(data.kpis.txnCount), sub: 'Total entries' },
-                { label: 'Avg Ticket Size', value: fc(data.kpis.avgTicket), sub: 'Per transaction' },
-                { label: 'Collection Rate', value: `${(data.kpis.collectionRate || 0).toFixed(1)}%`, sub: 'Paid / total transactions' },
+                { label: 'Commission Collected Today', value: fc(data.kpis.commissionCollectedToday), sub: "Today's commission earned" },
+                { label: 'Amount to Settle', value: fc(data.kpis.amountToSettle), sub: 'Pending across all transactions' },
               ].map(k => (
                 <div key={k.label} className="kpi-card">
                   <div className="kpi-label">{k.label}</div>
