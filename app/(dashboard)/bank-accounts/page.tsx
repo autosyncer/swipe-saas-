@@ -56,12 +56,17 @@ const ADD_AMOUNT_OPTIONS = [
   { value: 'charges',     label: 'CHARGES' },
 ]
 
+const MOBILE_BANKING_OPTIONS = ['PhonePe', 'Google Pay', 'Paytm'] as const
+type MobileBankingApp = typeof MOBILE_BANKING_OPTIONS[number]
+
 const EMPTY_FORM = {
   account_name: '', bank_name: '', account_type: 'Current',
   account_number: '', ifsc_code: '', branch: '',
   commission_pct: '', commission_type: 'Inclusive',
   notes: '', contact_person: '', contact_phone: '',
   opening_balance: '0',
+  mobile_banking_enabled: false,
+  mobile_banking_app: '' as MobileBankingApp | '',
 }
 
 interface SwipeMachineLinked {
@@ -120,6 +125,8 @@ function AccountPanel({
         contact_person: initial.contact_person || '',
         contact_phone: initial.contact_phone || '',
         opening_balance: String(initial.opening_balance || 0),
+        mobile_banking_enabled: !!(initial as Record<string,unknown>).mobile_banking_app,
+        mobile_banking_app: ((initial as Record<string,unknown>).mobile_banking_app as MobileBankingApp | '') || '',
       }
     }
     return EMPTY_FORM
@@ -172,6 +179,7 @@ function AccountPanel({
       contact_person: form.contact_person.trim(),
       contact_phone: form.contact_phone.trim(),
       opening_balance: parseFloat(form.opening_balance) || 0,
+      mobile_banking_app: form.mobile_banking_enabled && form.mobile_banking_app ? form.mobile_banking_app : null,
       ...(mode === 'add' ? { current_balance: parseFloat(form.opening_balance) || 0, is_active: true } : {}),
     }
     let dbError: { message: string; code?: string } | null = null
@@ -275,6 +283,45 @@ function AccountPanel({
                       <input className={inp()} placeholder="Main Branch" value={form.branch} onChange={e => set('branch', e.target.value)} />
                     </div>
                   </div>
+                </Section>
+
+                <Section title="Mobile Banking">
+                  <div className="flex items-center gap-3 mb-3">
+                    <button
+                      type="button"
+                      onClick={() => set('mobile_banking_enabled', !form.mobile_banking_enabled)}
+                      className="flex items-center gap-2 text-sm font-medium"
+                      style={{ color: form.mobile_banking_enabled ? '#3ECF8E' : '#9ca3af' }}
+                    >
+                      <span style={{
+                        width: 36, height: 20, borderRadius: 10, background: form.mobile_banking_enabled ? '#3ECF8E' : '#d1d5db',
+                        display: 'inline-flex', alignItems: 'center', padding: '0 2px', transition: 'background 0.2s', flexShrink: 0,
+                      }}>
+                        <span style={{
+                          width: 16, height: 16, borderRadius: '50%', background: '#fff',
+                          transform: form.mobile_banking_enabled ? 'translateX(16px)' : 'translateX(0)',
+                          transition: 'transform 0.2s', display: 'block',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                        }} />
+                      </span>
+                      {form.mobile_banking_enabled ? 'Enabled' : 'Disabled'}
+                    </button>
+                  </div>
+                  {form.mobile_banking_enabled && (
+                    <div>
+                      <Label>Mobile Banking App</Label>
+                      <select
+                        className={`${inp()} bg-white`}
+                        value={form.mobile_banking_app}
+                        onChange={e => set('mobile_banking_app', e.target.value)}
+                      >
+                        <option value="">Select app...</option>
+                        {MOBILE_BANKING_OPTIONS.map(app => (
+                          <option key={app} value={app}>{app}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </Section>
 
                 <Section title="Notes">
