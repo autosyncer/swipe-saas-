@@ -131,6 +131,7 @@ function EntryPageInner() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [showCustDrop, setShowCustDrop] = useState(false)
   const custRef = useRef<HTMLDivElement>(null)
+  const [pendingTxns, setPendingTxns] = useState<{ id: string; sr_no: number; date: string; total_amount: number; remarks: string; entry_type: string }[]>([])
 
   // Customer cards
   const [customerCards, setCustomerCards] = useState<Card[]>([])
@@ -384,6 +385,16 @@ function EntryPageInner() {
     setSelectedCardId('')
     setCustomBankCard(false)
 
+    // Fetch pending / unsettled transactions for this customer
+    const { data: pendData } = await supabase
+      .from('transactions')
+      .select('id, sr_no, date, total_amount, remarks, entry_type')
+      .eq('customer_name', c.name)
+      .in('remarks', ['PEND', 'UNPAID', 'PURU'])
+      .order('date', { ascending: false })
+      .limit(10)
+    setPendingTxns((pendData || []) as { id: string; sr_no: number; date: string; total_amount: number; remarks: string; entry_type: string }[])
+
     // Fetch customer's cards
     console.log('[cards] fetching for customer_id:', c.id)
     const { data, error } = await supabase
@@ -429,6 +440,7 @@ function EntryPageInner() {
     setSelectedCustomer(null)
     setCustomerCards([])
     setSelectedCardId('')
+    setPendingTxns([])
     setCustomBankCard(false)
     setShowReminder(false)
     setReminderDate('')
@@ -911,6 +923,7 @@ function EntryPageInner() {
                 if (!e.target.value) {
                   setSelectedCustomer(null)
                   setCustomerCards([])
+                  setPendingTxns([])
                   setAccountEntries(prev => prev.map(e => ({ ...e, commPct: String(DEFAULT_COMM) })))
                 }
               }}
@@ -932,6 +945,33 @@ function EntryPageInner() {
             </div>
           )}
         </div>
+
+        {/* Pending / unsettled transactions alert */}
+        {pendingTxns.length > 0 && (
+          <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#991b1b', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+              ⚠️ {pendingTxns.length} Unsettled Transaction{pendingTxns.length > 1 ? 's' : ''} — Action Required
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {pendingTxns.map(t => {
+                const labelMap: Record<string, string> = { PEND: 'Pending', UNPAID: 'Unpaid', PURU: 'Puru' }
+                const colorMap: Record<string, string> = { PEND: '#f59e0b', UNPAID: '#ef4444', PURU: '#8b5cf6' }
+                const typeLabel = t.entry_type === 'refill' ? 'Card Refill' : 'Card Swap'
+                return (
+                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                    <span style={{ background: colorMap[t.remarks] || '#f59e0b', color: '#fff', padding: '1px 6px', borderRadius: 4, fontWeight: 700, fontSize: 10, flexShrink: 0 }}>
+                      {labelMap[t.remarks] || t.remarks}
+                    </span>
+                    <span style={{ color: '#6b7280', flexShrink: 0 }}>SR #{t.sr_no}</span>
+                    <span style={{ color: '#374151', fontWeight: 600 }}>₹{Number(t.total_amount).toLocaleString('en-IN')}</span>
+                    <span style={{ color: '#9ca3af', flexShrink: 0 }}>{t.date}</span>
+                    <span style={{ color: '#6b7280', fontSize: 10, flexShrink: 0 }}>({typeLabel})</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* 2. Customer info card */}
         {selectedCustomer && (
