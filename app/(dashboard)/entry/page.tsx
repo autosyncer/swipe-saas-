@@ -240,7 +240,7 @@ function EntryPageInner() {
 
   // ── Load first active commodity for auto invoice line item ──
   useEffect(() => {
-    supabase.from('commodities').select('id,name,unit,current_price').eq('is_active', true).order('name').limit(1).single().then(({ data }) => {
+    supabase.from('commodities').select('id,name,unit,current_price').eq('is_active', true).order('created_at', { ascending: true }).limit(1).single().then(({ data }) => {
       if (data) setActiveCommodity(data)
     })
   }, [])
