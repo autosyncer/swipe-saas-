@@ -67,6 +67,9 @@ const EMPTY_FORM = {
   opening_balance: '0',
   mobile_banking_enabled: false,
   mobile_banking_app: '' as MobileBankingApp | '',
+  mb_phonepay_phone: '', mb_phonepay_upi: '',
+  mb_googlepay_phone: '', mb_googlepay_upi: '',
+  mb_paytm_phone: '', mb_paytm_upi: '',
 }
 
 interface SwipeMachineLinked {
@@ -127,6 +130,12 @@ function AccountPanel({
         opening_balance: String(initial.opening_balance || 0),
         mobile_banking_enabled: !!((initial as unknown as Record<string,unknown>).mobile_banking_app),
         mobile_banking_app: (((initial as unknown as Record<string,unknown>).mobile_banking_app) as MobileBankingApp | '') || '',
+        mb_phonepay_phone: String((initial as unknown as Record<string,unknown>).mb_phonepay_phone || ''),
+        mb_phonepay_upi: String((initial as unknown as Record<string,unknown>).mb_phonepay_upi || ''),
+        mb_googlepay_phone: String((initial as unknown as Record<string,unknown>).mb_googlepay_phone || ''),
+        mb_googlepay_upi: String((initial as unknown as Record<string,unknown>).mb_googlepay_upi || ''),
+        mb_paytm_phone: String((initial as unknown as Record<string,unknown>).mb_paytm_phone || ''),
+        mb_paytm_upi: String((initial as unknown as Record<string,unknown>).mb_paytm_upi || ''),
       }
     }
     return EMPTY_FORM
@@ -180,6 +189,12 @@ function AccountPanel({
       contact_phone: form.contact_phone.trim(),
       opening_balance: parseFloat(form.opening_balance) || 0,
       mobile_banking_app: form.mobile_banking_enabled && form.mobile_banking_app ? form.mobile_banking_app : null,
+      mb_phonepay_phone: form.mb_phonepay_phone || null,
+      mb_phonepay_upi: form.mb_phonepay_upi || null,
+      mb_googlepay_phone: form.mb_googlepay_phone || null,
+      mb_googlepay_upi: form.mb_googlepay_upi || null,
+      mb_paytm_phone: form.mb_paytm_phone || null,
+      mb_paytm_upi: form.mb_paytm_upi || null,
       ...(mode === 'add' ? { current_balance: parseFloat(form.opening_balance) || 0, is_active: true } : {}),
     }
     let dbError: { message: string; code?: string } | null = null
@@ -308,18 +323,48 @@ function AccountPanel({
                     </button>
                   </div>
                   {form.mobile_banking_enabled && (
-                    <div>
-                      <Label>Mobile Banking App</Label>
-                      <select
-                        className={`${inp()} bg-white`}
-                        value={form.mobile_banking_app}
-                        onChange={e => set('mobile_banking_app', e.target.value)}
-                      >
-                        <option value="">Select app...</option>
-                        {MOBILE_BANKING_OPTIONS.map(app => (
-                          <option key={app} value={app}>{app}</option>
-                        ))}
-                      </select>
+                    <div className="flex flex-col gap-2">
+                      {([
+                        { app: 'PhonePe', key: 'phonepay', color: '#5f259f', bg: '#f5f0fb', emoji: '📱' },
+                        { app: 'Google Pay', key: 'googlepay', color: '#1a73e8', bg: '#f0f6ff', emoji: '💳' },
+                        { app: 'Paytm', key: 'paytm', color: '#002970', bg: '#f0f4ff', emoji: '🔵' },
+                      ] as const).map(({ app, key, color, bg, emoji }) => {
+                        const isSelected = form.mobile_banking_app === app
+                        const phoneKey = `mb_${key}_phone` as keyof typeof form
+                        const upiKey = `mb_${key}_upi` as keyof typeof form
+                        return (
+                          <div key={app} style={{ border: `1.5px solid ${isSelected ? color : '#e5e7eb'}`, borderRadius: 8, overflow: 'hidden', transition: 'border-color 0.2s' }}>
+                            <button
+                              type="button"
+                              onClick={() => setForm(f => ({ ...f, mobile_banking_app: isSelected ? '' : app }))}
+                              className="w-full flex items-center gap-2 px-3 py-2.5 text-left"
+                              style={{ background: isSelected ? bg : '#fafafa', transition: 'background 0.2s' }}
+                            >
+                              <span style={{ fontSize: 16 }}>{emoji}</span>
+                              <span style={{ fontSize: 12, fontWeight: 700, color: isSelected ? color : '#374151' }}>{app}</span>
+                              <span style={{ marginLeft: 'auto', width: 16, height: 16, borderRadius: '50%', border: `2px solid ${isSelected ? color : '#d1d5db'}`, background: isSelected ? color : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                {isSelected && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', display: 'block' }} />}
+                              </span>
+                            </button>
+                            {isSelected && (
+                              <div style={{ padding: '10px 12px', borderTop: `1px solid ${color}20`, background: bg, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                <div>
+                                  <Label>Phone Number</Label>
+                                  <input className={inp()} placeholder="10-digit mobile number" type="tel"
+                                    value={String(form[phoneKey] || '')}
+                                    onChange={e => set(phoneKey, e.target.value)} />
+                                </div>
+                                <div>
+                                  <Label>UPI ID</Label>
+                                  <input className={inp()} placeholder={`yourname@${key === 'googlepay' ? 'okaxis' : key === 'paytm' ? 'paytm' : 'ybl'}`}
+                                    value={String(form[upiKey] || '')}
+                                    onChange={e => set(upiKey, e.target.value)} />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                 </Section>
