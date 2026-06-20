@@ -70,7 +70,8 @@ export default function SettlementPage() {
       const pendingPayment = (allTxns || []).filter((t: Transaction) => {
         const total = Number(t.total_amount || 0)
         const paid = Number(t.paid_amount || 0)
-        return total > 0 && paid < total
+        const settled = t.remarks === 'PAID' || t.remarks === 'SE'
+        return total > 0 && paid < total && !settled
       })
       setAcctPending(pendingPayment as Transaction[])
     } catch (e) {
