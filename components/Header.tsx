@@ -239,20 +239,16 @@ function NotificationsDropdown({ onClose }: { onClose: () => void }) {
       const refills = (refillRes.data || []) as { id: string; sr_no: number; customer_name: string; bank_card: string; total_amount: number; created_at: string; date: string }[]
       if (refills.length > 0) {
         // Fetch all swaps for these customers to cross-check
-        const customerNames = [...new Set(refills.map(r => r.customer_name))]
+        const customerNames = Array.from(new Set(refills.map(r => r.customer_name)))
         const { data: swaps } = await supabase
           .from('transactions')
           .select('customer_name,date')
           .eq('entry_type', 'swap')
           .in('customer_name', customerNames)
-        const swapSet = new Set((swaps || []).map((s: { customer_name: string; date: string }) => `${s.customer_name}__${s.date}`))
-
         refills.forEach(t => {
-          // If no swap exists for this customer on or after the refill date, alert
           const hasSwap = (swaps || []).some((s: { customer_name: string; date: string }) =>
             s.customer_name === t.customer_name && s.date >= t.date
           )
-          void swapSet
           if (!hasSwap) {
             const hoursAgo = Math.floor((Date.now() - new Date(t.created_at).getTime()) / 3600000)
             notes.push({
