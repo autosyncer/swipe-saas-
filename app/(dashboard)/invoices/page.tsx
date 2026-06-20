@@ -261,12 +261,12 @@ export default function InvoicesPage() {
     const store = stores.find(s => s.id === inv.store_id)
     const bank = bankAccounts.find(b => b.id === (inv.bank_account_id as string))
     return {
-      name: store?.name ?? DEFAULT_STORE.name,
-      address: store?.address ?? DEFAULT_STORE.address,
-      jurisdiction: store?.jurisdiction ?? DEFAULT_STORE.jurisdiction,
-      bankName: bank?.bank_name ?? DEFAULT_STORE.bankName,
-      accNo: bank?.account_number ?? DEFAULT_STORE.accNo,
-      ifsc: bank ? `${bank.branch} & ${bank.ifsc_code}` : DEFAULT_STORE.ifsc,
+      name: store?.name ?? '',
+      address: store?.address ?? '',
+      jurisdiction: store?.jurisdiction ?? '',
+      bankName: bank?.bank_name ?? '',
+      accNo: bank?.account_number ?? '',
+      ifsc: bank ? `${bank.branch} & ${bank.ifsc_code}` : '',
     }
   }
 

@@ -603,17 +603,16 @@ function EntryPageInner() {
         consigneeName = buyerName = transaction.customer_name as string
       }
 
-      // Step 3b: Fetch bank account details from transaction's account_name
+      // Step 3b: Bank details come from explicit bankAccountId selection only
       let storeBankName = ''
       let storeAccNo = ''
       let storeIfsc = ''
       let storeBranch = ''
-      const acctName = (transaction.account_name as string || '').split(/[+,]/)[0].trim()
-      if (acctName) {
+      if (bankAccountId) {
         const { data: bankAcc } = await supabase
-          .from('bank_account_master')
+          .from('bank_accounts')
           .select('bank_name, account_number, ifsc_code, branch')
-          .eq('account_name', acctName)
+          .eq('id', bankAccountId)
           .maybeSingle()
         if (bankAcc) {
           storeBankName = (bankAcc as Record<string, string>).bank_name || ''
