@@ -20,8 +20,8 @@ interface KPIData {
   totalCommission: number
   totalOutstanding: number
   txnCount: number
-  avgTicket: number
-  collectionRate: number
+  commissionCollectedToday: number
+  amountToSettle: number
 }
 
 interface KPIPrev {
@@ -393,20 +393,24 @@ export default function AnalyticsPage() {
     
     setLoadingKPI(true); setErrorKPI(null)
     try {
+      const today = new Date().toISOString().split('T')[0]
       let q = supabase.from('transactions').select('total_amount,paid_amount,commission_amount,remarks').gte('date', start).lte('date', end)
       q = applyAccountFilter(q)
-      const { data, error } = await q
+      const [{ data, error }, { data: todayData }, { data: pendingData }] = await Promise.all([
+        q,
+        supabase.from('transactions').select('commission_amount').eq('date', today),
+        supabase.from('transactions').select('total_amount,paid_amount').in('remarks', ['PEND', 'UNPAID', 'PURU']),
+      ])
       if (error) throw error
 
       const totalSwiped = data?.reduce((s, t) => s + (Number(t.total_amount) || 0), 0) ?? 0
       const totalCommission = data?.reduce((s, t) => s + (Number(t.commission_amount) || 0), 0) ?? 0
       const totalOutstanding = data?.reduce((s, t) => s + Math.max(0, (Number(t.total_amount) - Number(t.paid_amount)) || 0), 0) ?? 0
       const txnCount = data?.length ?? 0
-      const avgTicket = txnCount > 0 ? totalSwiped / txnCount : 0
-      const paidCount = data?.filter(t => ['PAID', 'Paid', 'paid'].includes(t.remarks ?? '')).length ?? 0
-      const collectionRate = txnCount > 0 ? (paidCount / txnCount) * 100 : 0
+      const commissionCollectedToday = todayData?.reduce((s, t) => s + (Number(t.commission_amount) || 0), 0) ?? 0
+      const amountToSettle = pendingData?.reduce((s, t) => s + Math.max(0, (Number(t.total_amount) - Number(t.paid_amount)) || 0), 0) ?? 0
 
-      setKpi({ totalSwiped, totalCommission, totalOutstanding, txnCount, avgTicket, collectionRate })
+      setKpi({ totalSwiped, totalCommission, totalOutstanding, txnCount, commissionCollectedToday, amountToSettle })
 
       // Previous period
       if (compare) {
@@ -821,26 +825,16 @@ export default function AnalyticsPage() {
           loading={loadingKPI}
         />
         <KPICard
-          title="Average Ticket Size"
-          value={kpi ? fmt(kpi.avgTicket) : '—'}
-          sub="avg per transaction"
+          title="Commission Collected Today"
+          value={kpi ? fmt(Math.round(kpi.commissionCollectedToday)) : '—'}
+          sub="today's commission earned"
           loading={loadingKPI}
         />
         <KPICard
-          title="Collection Rate"
-          value={kpi ? `${kpi.collectionRate.toFixed(1)}%` : '—'}
-          sub="paid / total transactions"
+          title="Amount to Settle"
+          value={kpi ? fmt(Math.round(kpi.amountToSettle)) : '—'}
+          sub="pending across all transactions"
           loading={loadingKPI}
-          extra={
-            kpi && !loadingKPI ? (
-              <div className="mt-2 h-1.5 rounded-full bg-[#f3f4f6] overflow-hidden">
-                <div
-                  className="h-full rounded-full transition-all duration-700"
-                  style={{ width: `${kpi.collectionRate}%`, background: kpi.collectionRate >= 80 ? '#3ECF8E' : '#f59e0b' }}
-                />
-              </div>
-            ) : null
-          }
         />
       </div>
 
