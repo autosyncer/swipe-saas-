@@ -1123,21 +1123,23 @@ function EntryPageInner() {
               </div>
 
               {/* Machine Name — swap only */}
-              {entryType === 'swap' && <div>
-                <label className={labelCls}>Swipe Machine</label>
-                <input className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                  value={entry.machineName}
-                  onChange={async e => {
-                    const machineName = e.target.value
-                    updateEntry(entry.id, { machineName })
-                    if (machineName) {
-                      const { data: m } = await supabase.from('swipe_machines').select('bank_commission_pct').eq('machine_name', machineName).maybeSingle()
-                      if (m) updateEntry(entry.id, { mdrPct: Number(m.bank_commission_pct || 0) })
-                    }
-                  }}
-                  placeholder="Auto-filled from account..."
-                />
-              </div>
+              {entryType === 'swap' && (
+                <div>
+                  <label className={labelCls}>Swipe Machine</label>
+                  <input className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                    value={entry.machineName}
+                    onChange={async e => {
+                      const machineName = e.target.value
+                      updateEntry(entry.id, { machineName })
+                      if (machineName) {
+                        const { data: m } = await supabase.from('swipe_machines').select('bank_commission_pct').eq('machine_name', machineName).maybeSingle()
+                        if (m) updateEntry(entry.id, { mdrPct: Number(m.bank_commission_pct || 0) })
+                      }
+                    }}
+                    placeholder="Auto-filled from account..."
+                  />
+                </div>
+              )}
 
               {/* Commission */}
               {(() => {
