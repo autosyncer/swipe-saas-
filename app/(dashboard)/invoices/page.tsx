@@ -48,6 +48,7 @@ interface StoreProfile {
   name: string
   address: string
   jurisdiction: string
+  gst_no: string
 }
 
 interface BankAccount {
@@ -78,7 +79,7 @@ const STATUS_ICONS: Record<string, React.ReactNode> = {
 const inp = 'w-full px-3 py-2 rounded-lg text-sm border border-[#e5e7eb] outline-none focus:border-[#3ECF8E] bg-white text-[#111]'
 const lbl = 'block text-xs font-medium text-[#374151] mb-1'
 
-const EMPTY_STORE: Omit<StoreProfile, 'id'> = { name: '', address: '', jurisdiction: '' }
+const EMPTY_STORE: Omit<StoreProfile, 'id'> = { name: '', address: '', jurisdiction: '', gst_no: '' }
 
 export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
@@ -294,7 +295,7 @@ export default function InvoicesPage() {
             <Receipt size={18} color="#3ECF8E" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-[#111]">Invoices</h1>
+            <h1 className="text-lg font-bold text-[#111]">Invoice</h1>
             <p className="text-xs text-[#6b7280]">{invoices.length} total</p>
           </div>
         </div>
@@ -324,10 +325,11 @@ export default function InvoicesPage() {
                   <div>
                     <div className="text-sm font-semibold text-[#111]">{s.name}</div>
                     {s.address && <div className="text-xs text-[#6b7280] mt-0.5 whitespace-pre-line">{s.address}</div>}
+                    {s.gst_no && <div className="text-xs text-[#6b7280] mt-0.5">GST: {s.gst_no}</div>}
                     {s.jurisdiction && <div className="text-xs text-[#9ca3af] mt-0.5">{s.jurisdiction}</div>}
                   </div>
                   <div className="flex items-center gap-2 ml-4 shrink-0">
-                    <button onClick={() => { setStoreDraft({ name: s.name, address: s.address, jurisdiction: s.jurisdiction }); setEditStoreId(s.id) }}
+                    <button onClick={() => { setStoreDraft({ name: s.name, address: s.address, jurisdiction: s.jurisdiction, gst_no: s.gst_no }); setEditStoreId(s.id) }}
                       className="text-xs px-2 py-1 rounded border border-[#e5e7eb] text-[#374151] hover:bg-white">Edit</button>
                     <button onClick={() => deleteStore(s.id)} className="text-[#ef4444] hover:text-red-700"><Trash2 size={14} /></button>
                   </div>
@@ -343,6 +345,10 @@ export default function InvoicesPage() {
               <div>
                 <label className={lbl}>Store Name *</label>
                 <input className={inp} value={storeDraft.name} onChange={e => setStoreDraft(p => ({ ...p, name: e.target.value }))} placeholder="Mahalaxmi Grain Store" />
+              </div>
+              <div>
+                <label className={lbl}>GST No.</label>
+                <input className={inp} value={storeDraft.gst_no} onChange={e => setStoreDraft(p => ({ ...p, gst_no: e.target.value.toUpperCase() }))} placeholder="27AAAAA0000A1Z5" />
               </div>
               <div>
                 <label className={lbl}>Jurisdiction</label>
@@ -384,6 +390,7 @@ export default function InvoicesPage() {
               {selectedStoreObj && (
                 <div className="mt-1.5 px-2 py-1.5 rounded-lg text-xs text-[#374151] border border-[#e5e7eb] bg-[#f9fafb] whitespace-pre-line">
                   {selectedStoreObj.address}
+                  {selectedStoreObj.gst_no && <div className="text-[#6b7280] mt-0.5">GST: {selectedStoreObj.gst_no}</div>}
                   {selectedStoreObj.jurisdiction && <div className="text-[#9ca3af] mt-0.5">{selectedStoreObj.jurisdiction}</div>}
                 </div>
               )}
