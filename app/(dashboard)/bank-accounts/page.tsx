@@ -69,6 +69,8 @@ const EMPTY_FORM = {
   mb_phonepay_phone: '', mb_phonepay_upi: '',
   mb_googlepay_phone: '', mb_googlepay_upi: '',
   mb_paytm_phone: '', mb_paytm_upi: '',
+  store_name: '', store_address: '', store_bank_name: '',
+  store_acc_no: '', store_branch_ifsc: '', store_gst_no: '',
 }
 
 interface SwipeMachineLinked {
@@ -135,6 +137,12 @@ function AccountPanel({
         mb_googlepay_upi: String((initial as unknown as Record<string,unknown>).mb_googlepay_upi || ''),
         mb_paytm_phone: String((initial as unknown as Record<string,unknown>).mb_paytm_phone || ''),
         mb_paytm_upi: String((initial as unknown as Record<string,unknown>).mb_paytm_upi || ''),
+        store_name: String((initial as unknown as Record<string,unknown>).store_name || ''),
+        store_address: String((initial as unknown as Record<string,unknown>).store_address || ''),
+        store_bank_name: String((initial as unknown as Record<string,unknown>).store_bank_name || ''),
+        store_acc_no: String((initial as unknown as Record<string,unknown>).store_acc_no || ''),
+        store_branch_ifsc: String((initial as unknown as Record<string,unknown>).store_branch_ifsc || ''),
+        store_gst_no: String((initial as unknown as Record<string,unknown>).store_gst_no || ''),
       }
     }
     return EMPTY_FORM
@@ -188,6 +196,12 @@ function AccountPanel({
       mb_googlepay_upi: form.mb_googlepay_upi || null,
       mb_paytm_phone: form.mb_paytm_phone || null,
       mb_paytm_upi: form.mb_paytm_upi || null,
+      store_name: form.store_name.trim() || null,
+      store_address: form.store_address.trim() || null,
+      store_bank_name: form.store_bank_name.trim() || null,
+      store_acc_no: form.store_acc_no.trim() || null,
+      store_branch_ifsc: form.store_branch_ifsc.trim() || null,
+      store_gst_no: form.store_gst_no.trim() || null,
       ...(mode === 'add' ? { current_balance: parseFloat(form.opening_balance) || 0, is_active: true } : {}),
     }
     let dbError: { message: string; code?: string } | null = null
@@ -424,6 +438,39 @@ function AccountPanel({
                   <div className="font-semibold text-[#374151] mb-1">Linked to account</div>
                   <div className="font-mono text-[#3ECF8E] font-bold">{form.account_name.trim().toUpperCase() || '—'}</div>
                   <div className="mt-1 text-[10px]">This machine will be automatically linked to the bank account on the left.</div>
+                </div>
+
+                {/* Store Details */}
+                <div className="mt-4">
+                  <div className="text-[10px] font-bold text-[#9ca3af] uppercase tracking-widest mb-3 pb-1 border-b border-[#f3f4f6]">Store Details</div>
+                  <div className="space-y-3">
+                    <div>
+                      <Label>Store Name</Label>
+                      <input className={inp()} placeholder="Mahalaxmi Grain Store" value={form.store_name} onChange={e => setForm(p => ({ ...p, store_name: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label>Store Address</Label>
+                      <textarea className={inp()} rows={3} placeholder="Shop No. 109, Orchid Harmony, Palanpur, Surat" value={form.store_address} onChange={e => setForm(p => ({ ...p, store_address: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label>Store Bank Name</Label>
+                      <input className={inp()} placeholder="BANK OF BARODA CA" value={form.store_bank_name} onChange={e => setForm(p => ({ ...p, store_bank_name: e.target.value }))} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label>Store A/c No.</Label>
+                        <input className={inp()} placeholder="028102000002596" value={form.store_acc_no} onChange={e => setForm(p => ({ ...p, store_acc_no: e.target.value }))} />
+                      </div>
+                      <div>
+                        <Label>Branch &amp; IFSC</Label>
+                        <input className={inp()} placeholder="UDHNA SURAT & BARB0UDHNAX" value={form.store_branch_ifsc} onChange={e => setForm(p => ({ ...p, store_branch_ifsc: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div>
+                      <Label>GST No.</Label>
+                      <input className={inp()} placeholder="27AAAAA0000A1Z5" value={form.store_gst_no} onChange={e => setForm(p => ({ ...p, store_gst_no: e.target.value.toUpperCase() }))} />
+                    </div>
+                  </div>
                 </div>
 
               </div>
