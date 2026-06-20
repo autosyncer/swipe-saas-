@@ -1,7 +1,8 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { Search, Plus, X, Edit, RefreshCw, ChevronDown, ChevronRight, CreditCard, Building2, Trash2, FileText, Upload, Eye, StickyNote, Receipt, Printer } from 'lucide-react'
+import InvoiceDocument from '@/components/invoice/InvoiceDocument'
 import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabase/admin-client'
 import { Customer, Transaction, Card, CustomerBankAccount } from '@/types/database'
@@ -694,6 +695,27 @@ function ExpandedRow({
   const [accts, setAccts] = useState<CustomerBankAccount[]>([])
   const [docs, setDocs] = useState<CustomerDocument[]>([])
   const [viewDoc, setViewDoc] = useState<CustomerDocument | null>(null)
+  // Invoice + Receipt modals
+  const [invoiceModal, setInvoiceModal] = useState<Record<string,unknown> | null>(null)
+  const [receiptTxn, setReceiptTxn] = useState<Transaction | null>(null)
+  const invoicePrintRef = useRef<HTMLDivElement>(null)
+  const receiptPrintRef = useRef<HTMLDivElement>(null)
+
+  async function openInvoice(t: Transaction) {
+    const invNo = `INV-SR-${String(t.sr_no).padStart(4, '0')}`
+    const { data } = await supabase.from('invoices').select('*').eq('invoice_number', invNo).maybeSingle()
+    if (data) setInvoiceModal(data as Record<string,unknown>)
+    else alert('No invoice found for this transaction.')
+  }
+
+  function printRef(ref: React.RefObject<HTMLDivElement>) {
+    const content = ref.current?.innerHTML
+    if (!content) return
+    const win = window.open('', '_blank')
+    if (!win) return
+    win.document.write(`<html><head><title>Print</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#111}table{width:100%;border-collapse:collapse}th,td{padding:8px 12px;border:1px solid #ddd;text-align:left}th{background:#f5f5f5}</style></head><body>${content}</body></html>`)
+    win.document.close(); win.print()
+  }
 
   useEffect(() => {
     supabase.from('cards').select('*').eq('customer_id', customer.id).then(({ data }) => setCards((data as Card[]) || []))
@@ -887,25 +909,12 @@ function ExpandedRow({
                     <td className="px-3 py-1.5"><StatusBadge status={t.remarks} /></td>
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-1">
-                        <a
-                          href={`/invoices?sr=${t.sr_no}`}
-                          target="_blank"
-                          title="View Invoice"
-                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border border-[#c4b5fd] text-[#7c3aed] bg-[#f5f3ff] hover:bg-[#ede9fe]"
-                        >
+                        <button onClick={() => openInvoice(t)}
+                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border border-[#c4b5fd] text-[#7c3aed] bg-[#f5f3ff] hover:bg-[#ede9fe]">
                           <Receipt size={10} /> Invoice
-                        </a>
-                        <button
-                          onClick={() => {
-                            const win = window.open('', '_blank')
-                            if (!win) return
-                            win.document.write(`<html><head><title>Receipt SR#${t.sr_no}</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#111;max-width:400px;margin:auto}.title{font-size:20px;font-weight:bold;text-align:center;margin-bottom:16px}.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eee}.label{color:#6b7280;font-size:13px}.value{font-weight:600;font-size:13px}.total{font-size:16px;font-weight:bold;margin-top:12px;text-align:right}.footer{text-align:center;margin-top:24px;font-size:11px;color:#9ca3af}</style></head><body><div class="title">RECEIPT</div><div class="row"><span class="label">SR No.</span><span class="value">#${t.sr_no}</span></div><div class="row"><span class="label">Date</span><span class="value">${t.date}</span></div><div class="row"><span class="label">Customer</span><span class="value">${t.customer_name || ''}</span></div><div class="row"><span class="label">Total Amount</span><span class="value">₹${Number(t.total_amount).toLocaleString('en-IN')}</span></div><div class="row"><span class="label">Paid Amount</span><span class="value">₹${Number(t.paid_amount).toLocaleString('en-IN')}</span></div><div class="row"><span class="label">Status</span><span class="value">${t.remarks || ''}</span></div><div class="footer">Thank you for your business</div></body></html>`)
-                            win.document.close()
-                            win.print()
-                          }}
-                          title="Print Receipt"
-                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border border-[#bbf7d0] text-[#15803d] bg-[#f0fdf4] hover:bg-[#dcfce7]"
-                        >
+                        </button>
+                        <button onClick={() => setReceiptTxn(t)}
+                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border border-[#bbf7d0] text-[#15803d] bg-[#f0fdf4] hover:bg-[#dcfce7]">
                           <Printer size={10} /> Receipt
                         </button>
                       </div>
@@ -917,6 +926,80 @@ function ExpandedRow({
           </div>
         )}
         {viewDoc && <DocViewer doc={viewDoc} onClose={() => setViewDoc(null)} />}
+
+        {/* Invoice Modal */}
+        {invoiceModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.4)' }}>
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+              <div className="flex items-center justify-between px-5 py-3 border-b border-[#e5e7eb]">
+                <span className="font-semibold text-sm text-[#111]">Invoice — {invoiceModal.invoice_number as string}</span>
+                <div className="flex gap-2">
+                  <button onClick={() => printRef(invoicePrintRef)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border border-[#e5e7eb] text-[#374151] hover:bg-gray-50">
+                    <Printer size={13} /> Print
+                  </button>
+                  <button onClick={() => setInvoiceModal(null)} className="text-[#9ca3af] hover:text-[#374151]"><X size={18} /></button>
+                </div>
+              </div>
+              <div className="overflow-y-auto flex-1 p-4" ref={invoicePrintRef}>
+                <InvoiceDocument
+                  invoiceNumber={invoiceModal.invoice_number as string}
+                  date={new Date((invoiceModal.transaction_date || invoiceModal.created_at) as string).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  customerName={invoiceModal.customer_name as string}
+                  customerAddress={(invoiceModal.customer_address as string) ?? ''}
+                  consigneeName={(invoiceModal.consignee_name as string) ?? ''}
+                  consigneeAddress={(invoiceModal.consignee_address as string) ?? ''}
+                  buyerName={(invoiceModal.buyer_name as string) ?? ''}
+                  buyerAddress={(invoiceModal.buyer_address as string) ?? ''}
+                  items={((invoiceModal.items as {name:string;unit:string;qty:number;price:number;subtotal:number}[]) ?? []).map(i => ({ name: i.name, unit: i.unit, qty: Number(i.qty), price: Number(i.price), subtotal: Number(i.subtotal) }))}
+                  subtotal={Number(invoiceModal.subtotal)}
+                  totalAmount={Number(invoiceModal.total_amount)}
+                  remarks={invoiceModal.notes as string}
+                  paidBy={(invoiceModal.paid_by as string) ?? ''}
+                  storeSettings={{ name: (invoiceModal.store_bank_name as string) ? '' : '', address: '', jurisdiction: '', bankName: (invoiceModal.store_bank_name as string) ?? '', accNo: (invoiceModal.store_acc_no as string) ?? '', ifsc: (invoiceModal.store_ifsc as string) ?? '' }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Receipt Modal */}
+        {receiptTxn && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.4)' }}>
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-sm flex flex-col">
+              <div className="flex items-center justify-between px-5 py-3 border-b border-[#e5e7eb]">
+                <span className="font-semibold text-sm text-[#111]">Receipt — SR #{receiptTxn.sr_no}</span>
+                <div className="flex gap-2">
+                  <button onClick={() => printRef(receiptPrintRef)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs border border-[#e5e7eb] text-[#374151] hover:bg-gray-50">
+                    <Printer size={13} /> Print
+                  </button>
+                  <button onClick={() => setReceiptTxn(null)} className="text-[#9ca3af] hover:text-[#374151]"><X size={18} /></button>
+                </div>
+              </div>
+              <div className="p-5" ref={receiptPrintRef}>
+                <div style={{ textAlign: 'center', fontWeight: 'bold', fontSize: '18px', marginBottom: '16px' }}>RECEIPT</div>
+                {[
+                  ['SR No.', `#${receiptTxn.sr_no}`],
+                  ['Date', receiptTxn.date],
+                  ['Customer', receiptTxn.customer_name],
+                  ['Bank Card', (receiptTxn as unknown as Record<string,string>).bank_card ?? '—'],
+                  ['Account', (receiptTxn as unknown as Record<string,string>).account_name ?? '—'],
+                  ['Total Amount', `₹${Number(receiptTxn.total_amount).toLocaleString('en-IN')}`],
+                  ['Paid Amount', `₹${Number(receiptTxn.paid_amount).toLocaleString('en-IN')}`],
+                  ['Commission', `${(receiptTxn as unknown as Record<string,string>).commission_pct ?? '—'}%`],
+                  ['Status', receiptTxn.remarks],
+                ].map(([label, value]) => (
+                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px solid #f3f4f6', fontSize: '13px' }}>
+                    <span style={{ color: '#6b7280' }}>{label}</span>
+                    <span style={{ fontWeight: 600 }}>{value}</span>
+                  </div>
+                ))}
+                <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '11px', color: '#9ca3af' }}>Thank you for your business</div>
+              </div>
+            </div>
+          </div>
+        )}
       </td>
     </tr>
   )
