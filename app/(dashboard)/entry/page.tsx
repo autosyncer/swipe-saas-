@@ -161,11 +161,6 @@ function EntryPageInner() {
   const [commodityItems, setCommodityItems] = useState<{ commodity_id: string; name: string; unit: string; qty: number; price: number; subtotal: number }[]>([])
   const [generatedInvoice, setGeneratedInvoice] = useState<{ invoice_number: string; customer_name: string; total_amount: number; items: { name: string; unit: string; qty: number; subtotal: number }[] } | null>(null)
   const [generatingInvoice, setGeneratingInvoice] = useState(false)
-  // Store + bank for invoice
-  const [invoiceStores, setInvoiceStores] = useState<{ id: string; name: string; address: string; jurisdiction: string }[]>([])
-  const [invoiceBanks, setInvoiceBanks] = useState<{ id: string; account_name: string; bank_name: string; account_number_masked: string; ifsc: string }[]>([])
-  const [selInvoiceStore, setSelInvoiceStore] = useState('')
-  const [selInvoiceBank, setSelInvoiceBank] = useState('')
 
   // Reminder
   const [showReminder, setShowReminder] = useState(false)
@@ -254,7 +249,6 @@ function EntryPageInner() {
         setCommodityItems([{ commodity_id: first.id, name: first.name, unit: first.unit || 'pcs', qty: 1, price, subtotal: price }])
       }
     })
-    supabase.from('invoice_stores').select('id,name,address,jurisdiction').order('name').then(({ data }) => setInvoiceStores(data ?? []))
     supabase.from('bank_accounts').select('id,account_name,bank_name,account_number_masked,ifsc').order('account_name').then(({ data }) => setInvoiceBanks(data ?? []))
   }, [])
 
@@ -546,9 +540,7 @@ function EntryPageInner() {
 
   async function generateInvoice(
     transaction: Record<string, unknown>,
-    items: { commodity_id: string; name: string; unit: string; qty: number; price: number; subtotal: number }[],
-    storeId?: string,
-    bankAccountId?: string
+    items: { commodity_id: string; name: string; unit: string; qty: number; price: number; subtotal: number }[]
   ) {
     const validItems = items.filter(i => i.name && i.qty > 0)
 
@@ -642,8 +634,6 @@ function EntryPageInner() {
           ? `SR #${transaction.sr_no} | Discount: ₹${discount.toLocaleString('en-IN')}`
           : `SR #${transaction.sr_no}`,
         status: 'draft',
-        store_id: storeId || null,
-        bank_account_id: bankAccountId || null,
       }
       console.log('[invoice] inserting:', insertPayload)
 
@@ -823,7 +813,7 @@ function EntryPageInner() {
           const qty = i.price > 0 ? Math.ceil(totalSwapAcrossEntries / i.price) : (i.qty || 1)
           return { ...i, qty, subtotal: qty * i.price }
         }).filter(i => i.qty > 0)
-        invoiceResult = await generateInvoice(txWithCustomer, autoItems, selInvoiceStore, selInvoiceBank)
+        invoiceResult = await generateInvoice(txWithCustomer, autoItems)
         if (invoiceResult) setGeneratedInvoice(invoiceResult)
       }
 
@@ -1636,37 +1626,6 @@ function EntryPageInner() {
         </div>
 
         {/* Invoice — store + bank selection */}
-        {(invoiceStores.length > 0 || invoiceBanks.length > 0) && (
-          <div style={{ display: 'flex', gap: '12px', padding: '10px 0', borderTop: '1px solid #e5e7eb', marginTop: '4px' }}>
-            {invoiceStores.length > 0 && (
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: '11px', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '4px' }}>Invoice Store</label>
-                <select
-                  value={selInvoiceStore}
-                  onChange={e => setSelInvoiceStore(e.target.value)}
-                  style={{ width: '100%', padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', fontSize: '12px', background: 'white', color: '#111', outline: 'none' }}
-                >
-                  <option value="">— No store —</option>
-                  {invoiceStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-              </div>
-            )}
-            {invoiceBanks.length > 0 && (
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: '11px', fontWeight: 600, color: '#374151', display: 'block', marginBottom: '4px' }}>Invoice Bank</label>
-                <select
-                  value={selInvoiceBank}
-                  onChange={e => setSelInvoiceBank(e.target.value)}
-                  style={{ width: '100%', padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', fontSize: '12px', background: 'white', color: '#111', outline: 'none' }}
-                >
-                  <option value="">— No bank —</option>
-                  {invoiceBanks.map(b => <option key={b.id} value={b.id}>{b.account_name}</option>)}
-                </select>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Commodity + Invoice — fully automated, no UI shown */}
         {generatedInvoice && (
           <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '8px', padding: '12px' }}>
