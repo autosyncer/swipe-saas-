@@ -216,8 +216,9 @@ export default function ChamundaSheetView() {
     await fetchAll()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const hasLoadedOnce = useRef(false)
   const fetchAll = useCallback(async () => {
-    setLoading(true)
+    if (!hasLoadedOnce.current) setLoading(true)
     const [{ data: sheetData }, { data: l15Data }, { data: txData }] = await Promise.all([
       supabase.from('chamunda_sheet').select('*').order('date', { ascending: false }).order('sort_order', { ascending: true }).limit(5000),
       supabase.from('l15_entries').select('*').order('date', { ascending: false }).order('created_at').limit(2000),
@@ -229,6 +230,7 @@ export default function ChamundaSheetView() {
     ;(txData || []).forEach((t: { id: string; entry_type: string }) => { etMap[t.id] = t.entry_type })
     setEntryTypeMap(etMap)
     setLoading(false)
+    hasLoadedOnce.current = true
   }, [])
 
   useEffect(() => { fetchSheet(selectedDate) }, [fetchSheet, selectedDate])
