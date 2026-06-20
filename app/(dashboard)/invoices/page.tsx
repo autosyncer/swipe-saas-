@@ -4,9 +4,9 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/lib/auth-context'
 import { logAction } from '@/lib/audit-log'
-import { Receipt, Plus, Search, Eye, X, Printer, CheckCircle, Clock, Ban, FileText, Settings } from 'lucide-react'
+import { Receipt, Plus, Search, Eye, X, Printer, CheckCircle, Clock, Ban, FileText, Settings, Store, Trash2 } from 'lucide-react'
 import InvoiceDocument from '@/components/invoice/InvoiceDocument'
-import { loadStoreSettings, saveStoreSettings, StoreSettings } from '@/lib/store-settings'
+import { StoreSettings, DEFAULT_STORE } from '@/lib/store-settings'
 
 interface InvoiceItem {
   commodity_id: string
@@ -39,6 +39,24 @@ interface Invoice {
   status: 'draft' | 'sent' | 'paid' | 'cancelled'
   created_at: string
   updated_at: string
+  store_id?: string | null
+  bank_account_id?: string | null
+}
+
+interface StoreProfile {
+  id: string
+  name: string
+  address: string
+  jurisdiction: string
+}
+
+interface BankAccount {
+  id: string
+  account_name: string
+  bank_name: string
+  account_number: string
+  ifsc_code: string
+  branch: string
 }
 
 interface Commodity { id: string; name: string; unit: string; current_price: number }
@@ -61,6 +79,8 @@ const STATUS_ICONS: Record<string, React.ReactNode> = {
 const inp = 'w-full px-3 py-2 rounded-lg text-sm border border-[#e5e7eb] outline-none focus:border-[#3ECF8E] bg-white text-[#111]'
 const lbl = 'block text-xs font-medium text-[#374151] mb-1'
 
+const EMPTY_STORE: Omit<StoreProfile, 'id'> = { name: '', address: '', jurisdiction: '' }
+
 export default function InvoicesPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [loading, setLoading] = useState(true)
@@ -76,20 +96,21 @@ export default function InvoicesPage() {
   const [invoiceNotes, setInvoiceNotes] = useState('')
   const [creating, setCreating] = useState(false)
 
+  // Store profiles
+  const [stores, setStores] = useState<StoreProfile[]>([])
+  const [selStore, setSelStore] = useState('')
+  const [showManageStores, setShowManageStores] = useState(false)
+  const [storeDraft, setStoreDraft] = useState<Omit<StoreProfile, 'id'>>(EMPTY_STORE)
+  const [editStoreId, setEditStoreId] = useState<string | null>(null)
+  const [savingStore, setSavingStore] = useState(false)
+
+  // Bank accounts
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
+  const [selBank, setSelBank] = useState('')
+
   const [detailInvoice, setDetailInvoice] = useState<Invoice | null>(null)
   const printRef = useRef<HTMLDivElement>(null)
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
-
-  const [showStoreSettings, setShowStoreSettings] = useState(false)
-  const [storeSettings, setStoreSettings] = useState<StoreSettings>(loadStoreSettings())
-  const [storeDraft, setStoreDraft] = useState<StoreSettings>(loadStoreSettings())
-
-  function saveStore() {
-    saveStoreSettings(storeDraft)
-    setStoreSettings({ ...storeDraft })
-    setShowStoreSettings(false)
-    showToast('Store settings saved')
-  }
 
   function showToast(msg: string, type: 'success' | 'error' = 'success') {
     setToast({ msg, type }); setTimeout(() => setToast(null), 3000)
@@ -102,14 +123,22 @@ export default function InvoicesPage() {
     setLoading(false)
   }
 
+  async function fetchStores() {
+    const { data } = await supabase.from('invoice_stores').select('*').order('name')
+    setStores(data ?? [])
+  }
+
   useEffect(() => {
     fetchInvoices()
+    fetchStores()
     Promise.all([
       supabase.from('commodities').select('id,name,unit,current_price').eq('is_active', true).order('name'),
       supabase.from('customers').select('id,name').order('name'),
-    ]).then(([{ data: comms }, { data: custs }]) => {
+      supabase.from('bank_accounts').select('id,account_name,bank_name,account_number,ifsc_code,branch').order('account_name'),
+    ]).then(([{ data: comms }, { data: custs }, { data: banks }]) => {
       setCommodities(comms ?? [])
       setCustomers(custs ?? [])
+      setBankAccounts(banks ?? [])
     })
   }, [])
 
@@ -140,17 +169,28 @@ export default function InvoicesPage() {
     const { data: invNum } = await supabase.rpc('generate_invoice_number')
     const customer = customers.find(c => c.id === selCustomer)
     const { data, error } = await supabase.from('invoices').insert({
-      invoice_number: invNum, customer_id: selCustomer, customer_name: customer?.name ?? '',
-      items: validItems, subtotal: subtotalCalc, tax_percent: parseFloat(taxPercent) || 0,
-      tax_amount: taxAmt, total_amount: totalCalc, notes: invoiceNotes.trim() || null, status: 'draft',
+      invoice_number: invNum,
+      customer_id: selCustomer,
+      customer_name: customer?.name ?? '',
+      items: validItems,
+      subtotal: subtotalCalc,
+      tax_percent: parseFloat(taxPercent) || 0,
+      tax_amount: taxAmt,
+      total_amount: totalCalc,
+      notes: invoiceNotes.trim() || null,
+      status: 'draft',
+      store_id: selStore || null,
+      bank_account_id: selBank || null,
     }).select().single()
     if (error) showToast('Failed to create invoice', 'error')
     else {
       logAction({ action: 'create_invoice', module: 'Invoices', details: { invoice_number: data.invoice_number, total: totalCalc } })
       showToast(`Invoice ${data.invoice_number} created`)
-      setShowCreate(false); setSelCustomer('')
+      setShowCreate(false)
+      setSelCustomer(''); setSelStore(''); setSelBank('')
       setItems([{ commodity_id: '', name: '', unit: 'pcs', qty: 1, price: 0, subtotal: 0 }])
-      setTaxPercent('0'); setInvoiceNotes(''); fetchInvoices()
+      setTaxPercent('0'); setInvoiceNotes('')
+      fetchInvoices()
     }
     setCreating(false)
   }
@@ -171,10 +211,48 @@ export default function InvoicesPage() {
     win.document.close(); win.print()
   }
 
+  // Store management
+  async function saveStore() {
+    if (!storeDraft.name.trim()) { showToast('Store name is required', 'error'); return }
+    setSavingStore(true)
+    if (editStoreId) {
+      await supabase.from('invoice_stores').update(storeDraft).eq('id', editStoreId)
+    } else {
+      await supabase.from('invoice_stores').insert(storeDraft)
+    }
+    await fetchStores()
+    setStoreDraft(EMPTY_STORE); setEditStoreId(null)
+    setSavingStore(false)
+    showToast(editStoreId ? 'Store updated' : 'Store added')
+  }
+
+  async function deleteStore(id: string) {
+    await supabase.from('invoice_stores').delete().eq('id', id)
+    await fetchStores()
+    showToast('Store deleted')
+  }
+
+  // Resolve store settings for invoice display
+  function resolveStoreSettings(inv: Invoice): StoreSettings {
+    const store = stores.find(s => s.id === inv.store_id)
+    const bank = bankAccounts.find(b => b.id === (inv.bank_account_id as string))
+    return {
+      name: store?.name ?? DEFAULT_STORE.name,
+      address: store?.address ?? DEFAULT_STORE.address,
+      jurisdiction: store?.jurisdiction ?? DEFAULT_STORE.jurisdiction,
+      bankName: bank?.bank_name ?? DEFAULT_STORE.bankName,
+      accNo: bank?.account_number ?? DEFAULT_STORE.accNo,
+      ifsc: bank ? `${bank.branch} & ${bank.ifsc_code}` : DEFAULT_STORE.ifsc,
+    }
+  }
+
   const filtered = invoices.filter(inv =>
     (inv.invoice_number.toLowerCase().includes(search.toLowerCase()) || inv.customer_name.toLowerCase().includes(search.toLowerCase()))
     && (filterStatus === 'all' || inv.status === filterStatus)
   )
+
+  const selectedStoreObj = stores.find(s => s.id === selStore)
+  const selectedBankObj = bankAccounts.find(b => b.id === selBank)
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -198,9 +276,9 @@ export default function InvoicesPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => { setStoreDraft({ ...storeSettings }); setShowStoreSettings(v => !v) }}
+          <button onClick={() => setShowManageStores(v => !v)}
             className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border border-[#e5e7eb] text-[#374151] hover:bg-gray-50">
-            <Settings size={14} /> Store Details
+            <Store size={14} /> Manage Stores
           </button>
           <button onClick={() => setShowCreate(v => !v)}
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white"
@@ -210,58 +288,59 @@ export default function InvoicesPage() {
         </div>
       </div>
 
-      {/* Store Settings Panel */}
-      {showStoreSettings && (
+      {/* Manage Stores Panel */}
+      {showManageStores && (
         <div className="rounded-xl p-5 mb-5 border border-[#e5e7eb] bg-white shadow-sm">
-          <h3 className="text-sm font-semibold text-[#111] mb-4">Store / Company Details</h3>
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label className={lbl}>Store Name *</label>
-              <input className={inp} value={storeDraft.name}
-                onChange={e => setStoreDraft(p => ({ ...p, name: e.target.value }))}
-                placeholder="Mahalaxmi Grain Store" />
+          <h3 className="text-sm font-semibold text-[#111] mb-4">Store Profiles</h3>
+
+          {/* Existing stores */}
+          {stores.length > 0 && (
+            <div className="mb-4 space-y-2">
+              {stores.map(s => (
+                <div key={s.id} className="flex items-start justify-between p-3 rounded-lg border border-[#e5e7eb] bg-[#f9fafb]">
+                  <div>
+                    <div className="text-sm font-semibold text-[#111]">{s.name}</div>
+                    {s.address && <div className="text-xs text-[#6b7280] mt-0.5 whitespace-pre-line">{s.address}</div>}
+                    {s.jurisdiction && <div className="text-xs text-[#9ca3af] mt-0.5">{s.jurisdiction}</div>}
+                  </div>
+                  <div className="flex items-center gap-2 ml-4 shrink-0">
+                    <button onClick={() => { setStoreDraft({ name: s.name, address: s.address, jurisdiction: s.jurisdiction }); setEditStoreId(s.id) }}
+                      className="text-xs px-2 py-1 rounded border border-[#e5e7eb] text-[#374151] hover:bg-white">Edit</button>
+                    <button onClick={() => deleteStore(s.id)} className="text-[#ef4444] hover:text-red-700"><Trash2 size={14} /></button>
+                  </div>
+                </div>
+              ))}
             </div>
-            <div>
-              <label className={lbl}>Jurisdiction</label>
-              <input className={inp} value={storeDraft.jurisdiction}
-                onChange={e => setStoreDraft(p => ({ ...p, jurisdiction: e.target.value }))}
-                placeholder="SUBJECT TO SURAT JURISDICTION" />
+          )}
+
+          {/* Add / Edit form */}
+          <div className="border-t border-[#e5e7eb] pt-4">
+            <div className="text-xs font-semibold text-[#374151] mb-3">{editStoreId ? 'Edit Store' : 'Add Store'}</div>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className={lbl}>Store Name *</label>
+                <input className={inp} value={storeDraft.name} onChange={e => setStoreDraft(p => ({ ...p, name: e.target.value }))} placeholder="Mahalaxmi Grain Store" />
+              </div>
+              <div>
+                <label className={lbl}>Jurisdiction</label>
+                <input className={inp} value={storeDraft.jurisdiction} onChange={e => setStoreDraft(p => ({ ...p, jurisdiction: e.target.value }))} placeholder="SUBJECT TO SURAT JURISDICTION" />
+              </div>
+              <div className="col-span-2">
+                <label className={lbl}>Store Address</label>
+                <textarea className={inp} rows={2} value={storeDraft.address} onChange={e => setStoreDraft(p => ({ ...p, address: e.target.value }))} placeholder="Shop No., Area, City" />
+              </div>
             </div>
-            <div className="col-span-2">
-              <label className={lbl}>Store Address</label>
-              <textarea className={inp} rows={3} value={storeDraft.address}
-                onChange={e => setStoreDraft(p => ({ ...p, address: e.target.value }))}
-                placeholder="Shop No., Area, City" />
+            <div className="flex gap-2">
+              {editStoreId && (
+                <button onClick={() => { setStoreDraft(EMPTY_STORE); setEditStoreId(null) }}
+                  className="px-3 py-1.5 rounded-lg text-sm border border-[#e5e7eb] text-[#374151] hover:bg-gray-50">Cancel</button>
+              )}
+              <button onClick={saveStore} disabled={savingStore}
+                className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
+                style={{ background: '#3ECF8E' }}>
+                {savingStore ? 'Saving...' : editStoreId ? 'Update Store' : 'Add Store'}
+              </button>
             </div>
-            <div>
-              <label className={lbl}>Bank Name</label>
-              <input className={inp} value={storeDraft.bankName}
-                onChange={e => setStoreDraft(p => ({ ...p, bankName: e.target.value }))}
-                placeholder="Bank Name" />
-            </div>
-            <div>
-              <label className={lbl}>Account No.</label>
-              <input className={inp} value={storeDraft.accNo}
-                onChange={e => setStoreDraft(p => ({ ...p, accNo: e.target.value }))}
-                placeholder="Account Number" />
-            </div>
-            <div className="col-span-2">
-              <label className={lbl}>Branch &amp; IFSC Code</label>
-              <input className={inp} value={storeDraft.ifsc}
-                onChange={e => setStoreDraft(p => ({ ...p, ifsc: e.target.value }))}
-                placeholder="Branch Name & IFSC Code" />
-            </div>
-          </div>
-          <div className="flex gap-2 justify-end">
-            <button onClick={() => setShowStoreSettings(false)}
-              className="px-4 py-2 rounded-lg text-sm border border-[#e5e7eb] text-[#374151] hover:bg-gray-50">
-              Cancel
-            </button>
-            <button onClick={saveStore}
-              className="px-4 py-2 rounded-lg text-sm font-semibold text-white"
-              style={{ background: '#3ECF8E' }}>
-              Save Store Details
-            </button>
           </div>
         </div>
       )}
@@ -270,12 +349,43 @@ export default function InvoicesPage() {
       {showCreate && (
         <div className="rounded-xl p-5 mb-5 border border-[#e5e7eb] bg-white shadow-sm">
           <h3 className="text-sm font-semibold text-[#111] mb-4">Create Invoice</h3>
-          <div className="mb-4">
-            <label className={lbl}>Customer *</label>
-            <select className={`${inp} max-w-xs`} value={selCustomer} onChange={e => setSelCustomer(e.target.value)}>
-              <option value="">Select customer...</option>
-              {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+
+          {/* Store + Bank + Customer row */}
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div>
+              <label className={lbl}>Select Store</label>
+              <select className={inp} value={selStore} onChange={e => setSelStore(e.target.value)}>
+                <option value="">— No store —</option>
+                {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              {selectedStoreObj && (
+                <div className="mt-1.5 px-2 py-1.5 rounded-lg text-xs text-[#374151] border border-[#e5e7eb] bg-[#f9fafb] whitespace-pre-line">
+                  {selectedStoreObj.address}
+                  {selectedStoreObj.jurisdiction && <div className="text-[#9ca3af] mt-0.5">{selectedStoreObj.jurisdiction}</div>}
+                </div>
+              )}
+            </div>
+            <div>
+              <label className={lbl}>Select Bank Account</label>
+              <select className={inp} value={selBank} onChange={e => setSelBank(e.target.value)}>
+                <option value="">— No bank —</option>
+                {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.account_name}</option>)}
+              </select>
+              {selectedBankObj && (
+                <div className="mt-1.5 px-2 py-1.5 rounded-lg text-xs text-[#374151] border border-[#e5e7eb] bg-[#f9fafb]">
+                  <div>{selectedBankObj.bank_name}</div>
+                  <div className="text-[#6b7280]">A/C: {selectedBankObj.account_number}</div>
+                  <div className="text-[#6b7280]">{selectedBankObj.ifsc_code}</div>
+                </div>
+              )}
+            </div>
+            <div>
+              <label className={lbl}>Customer *</label>
+              <select className={inp} value={selCustomer} onChange={e => setSelCustomer(e.target.value)}>
+                <option value="">Select customer...</option>
+                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
           </div>
 
           {/* Items table */}
@@ -463,13 +573,7 @@ export default function InvoicesPage() {
                 totalAmount={Number(detailInvoice.total_amount)}
                 remarks={detailInvoice.notes}
                 paidBy={detailInvoice.paid_by ?? ''}
-                storeSettings={{
-                  ...storeSettings,
-                  // Override bank details from the transaction's account if available
-                  bankName: (detailInvoice as unknown as Record<string,string>).store_bank_name || storeSettings.bankName,
-                  accNo:    (detailInvoice as unknown as Record<string,string>).store_acc_no    || storeSettings.accNo,
-                  ifsc:     (detailInvoice as unknown as Record<string,string>).store_ifsc      || storeSettings.ifsc,
-                }}
+                storeSettings={resolveStoreSettings(detailInvoice)}
               />
             </div>
           </div>
