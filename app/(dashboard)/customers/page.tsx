@@ -957,7 +957,7 @@ function ExpandedRow({
                   totalAmount={Number(invoiceModal.total_amount)}
                   remarks={invoiceModal.notes as string}
                   paidBy={(invoiceModal.paid_by as string) ?? ''}
-                  storeSettings={{ name: (invoiceModal.store_bank_name as string) ? '' : '', address: '', jurisdiction: '', bankName: (invoiceModal.store_bank_name as string) ?? '', accNo: (invoiceModal.store_acc_no as string) ?? '', ifsc: (invoiceModal.store_ifsc as string) ?? '' }}
+                  storeSettings={{ name: '', address: '', jurisdiction: '', bankName: '', accNo: '', ifsc: '' }}
                 />
               </div>
             </div>

@@ -603,24 +603,6 @@ function EntryPageInner() {
         consigneeName = buyerName = transaction.customer_name as string
       }
 
-      // Step 3b: Bank details come from explicit bankAccountId selection only
-      let storeBankName = ''
-      let storeAccNo = ''
-      let storeIfsc = ''
-      let storeBranch = ''
-      if (bankAccountId) {
-        const { data: bankAcc } = await supabase
-          .from('bank_accounts')
-          .select('bank_name, account_number_masked, ifsc')
-          .eq('id', bankAccountId)
-          .maybeSingle()
-        if (bankAcc) {
-          storeBankName = (bankAcc as Record<string, string>).bank_name || ''
-          storeAccNo    = (bankAcc as Record<string, string>).account_number_masked || ''
-          storeIfsc     = (bankAcc as Record<string, string>).ifsc || ''
-          storeBranch   = ''
-        }
-      }
 
       // Step 4: Build insert payload
       const subtotal = validItems.reduce((s, i) => s + i.subtotal, 0)
@@ -660,9 +642,6 @@ function EntryPageInner() {
           ? `SR #${transaction.sr_no} | Discount: ₹${discount.toLocaleString('en-IN')}`
           : `SR #${transaction.sr_no}`,
         status: 'draft',
-        store_bank_name: storeBankName,
-        store_acc_no:    storeAccNo,
-        store_ifsc:      storeIfsc,
         store_id: storeId || null,
         bank_account_id: bankAccountId || null,
       }
