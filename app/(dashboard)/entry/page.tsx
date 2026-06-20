@@ -952,13 +952,13 @@ function EntryPageInner() {
             <div style={{ fontSize: 12, fontWeight: 700, color: '#991b1b', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
               ⚠️ {pendingTxns.length} Unsettled Transaction{pendingTxns.length > 1 ? 's' : ''} — Action Required
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {pendingTxns.map(t => {
                 const labelMap: Record<string, string> = { PEND: 'Pending', UNPAID: 'Unpaid', PURU: 'Puru' }
                 const colorMap: Record<string, string> = { PEND: '#f59e0b', UNPAID: '#ef4444', PURU: '#8b5cf6' }
                 const typeLabel = t.entry_type === 'refill' ? 'Card Refill' : 'Card Swap'
                 return (
-                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, flexWrap: 'wrap' }}>
                     <span style={{ background: colorMap[t.remarks] || '#f59e0b', color: '#fff', padding: '1px 6px', borderRadius: 4, fontWeight: 700, fontSize: 10, flexShrink: 0 }}>
                       {labelMap[t.remarks] || t.remarks}
                     </span>
@@ -966,6 +966,25 @@ function EntryPageInner() {
                     <span style={{ color: '#374151', fontWeight: 600 }}>₹{Number(t.total_amount).toLocaleString('en-IN')}</span>
                     <span style={{ color: '#9ca3af', flexShrink: 0 }}>{t.date}</span>
                     <span style={{ color: '#6b7280', fontSize: 10, flexShrink: 0 }}>({typeLabel})</span>
+                    <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await supabase.from('transactions').update({ remarks: 'PAID', status: 'Paid' }).eq('id', t.id)
+                          setPendingTxns(prev => prev.filter(x => x.id !== t.id))
+                        }}
+                        style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
+                      >
+                        ✓ Settle
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/sheets?sheet=daily_register&sr=${t.sr_no}&date=${t.date}`)}
+                        style={{ background: '#eff6ff', color: '#1e40af', border: '1px solid #bfdbfe', borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
+                      >
+                        View →
+                      </button>
+                    </div>
                   </div>
                 )
               })}
