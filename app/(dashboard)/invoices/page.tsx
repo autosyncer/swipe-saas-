@@ -92,7 +92,6 @@ export default function InvoicesPage() {
   const [storeDraft, setStoreDraft] = useState({ name: '', address: '', jurisdiction: '', gst_no: '', bank_name: '', acc_no: '', ifsc: '' })
   const [editStoreId, setEditStoreId] = useState<string | null>(null)
   const [savingStore, setSavingStore] = useState(false)
-  const [selStore, setSelStore] = useState('')
 
   // Bank accounts
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
@@ -100,7 +99,6 @@ export default function InvoicesPage() {
 
   // Inline bank picker on invoice row
   const [pickerInvoiceId, setPickerInvoiceId] = useState<string | null>(null)
-  const [pickerStore, setPickerStore] = useState('')
   const [pickerBank, setPickerBank] = useState('')
   const [savingPicker, setSavingPicker] = useState(false)
 
@@ -175,7 +173,6 @@ export default function InvoicesPage() {
   async function deleteStore(id: string) {
     await supabase.from('invoice_stores').delete().eq('id', id)
     await fetchStores()
-    if (selStore === id) setSelStore('')
     showToast('Store deleted')
   }
 
@@ -210,7 +207,7 @@ export default function InvoicesPage() {
       total_amount: totalCalc,
       notes: invoiceNotes.trim() || null,
       status: 'draft',
-      store_id: selStore || null,
+      store_id: null,
       bank_account_id: selBank || null,
     }).select().single()
     if (error) showToast('Failed to create invoice', 'error')
@@ -228,14 +225,13 @@ export default function InvoicesPage() {
 
   function openPicker(inv: Invoice) {
     setPickerInvoiceId(inv.id)
-    setPickerStore((inv.store_id as string) ?? '')
     setPickerBank((inv.bank_account_id as string) ?? '')
   }
 
   async function savePickerDetails(invId: string) {
     setSavingPicker(true)
     await supabase.from('invoices').update({
-      store_id: pickerStore || null,
+      store_id: null,
       bank_account_id: pickerBank || null,
     }).eq('id', invId)
     await fetchInvoices()
@@ -266,7 +262,6 @@ export default function InvoicesPage() {
   )
 
   const selectedBankObj = bankAccounts.find(b => b.id === selBank)
-  const selectedStoreObj = stores.find(s => s.id === selStore)
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -383,21 +378,7 @@ export default function InvoicesPage() {
           <h3 className="text-sm font-semibold text-[#111] mb-4">Create Invoice</h3>
 
           {/* Bank + Customer row */}
-          <div className="grid grid-cols-3 gap-4 mb-4">
-            <div>
-              <label className={lbl}>Select Store</label>
-              <select className={inp} value={selStore} onChange={e => setSelStore(e.target.value)}>
-                <option value="">— No store —</option>
-                {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-              {selectedStoreObj && (
-                <div className="mt-1.5 px-2 py-1.5 rounded-lg text-xs text-[#374151] border border-[#e5e7eb] bg-[#f9fafb] space-y-0.5">
-                  {selectedStoreObj.address && <div className="whitespace-pre-line">{selectedStoreObj.address}</div>}
-                  {selectedStoreObj.bank_name && <div>Bank: {selectedStoreObj.bank_name}</div>}
-                  {selectedStoreObj.acc_no && <div className="text-[#6b7280]">A/C: {selectedStoreObj.acc_no}</div>}
-                </div>
-              )}
-            </div>
+          <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className={lbl}>Select Bank Account</label>
               <select className={inp} value={selBank} onChange={e => setSelBank(e.target.value)}>
@@ -581,17 +562,6 @@ export default function InvoicesPage() {
                     <tr key={`${inv.id}-picker`} style={{ background: '#f0f9ff' }}>
                       <td colSpan={6} className="px-4 py-3">
                         <div className="flex items-end gap-4">
-                          <div style={{ flex: 1 }}>
-                            <label className={lbl}>Select Store</label>
-                            <select className={inp} value={pickerStore} onChange={e => setPickerStore(e.target.value)}>
-                              <option value="">— No store —</option>
-                              {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                            </select>
-                            {pickerStore && stores.find(s => s.id === pickerStore) && (() => {
-                              const s = stores.find(s => s.id === pickerStore)!
-                              return <div className="mt-1 text-xs text-[#6b7280]">{s.address}</div>
-                            })()}
-                          </div>
                           <div style={{ flex: 1 }}>
                             <label className={lbl}>Select Bank Account</label>
                             <select className={inp} value={pickerBank} onChange={e => setPickerBank(e.target.value)}>
