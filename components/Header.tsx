@@ -23,7 +23,7 @@ interface SearchTransaction {
 }
 interface Notification {
   id: string
-  type: 'due' | 'pending' | 'new'
+  type: 'due' | 'pending' | 'new' | 'refill'
   title: string
   subtitle: string
   timeAgo: string
@@ -185,10 +185,16 @@ function NotificationsDropdown({ onClose }: { onClose: () => void }) {
       const plus7 = new Date(today.getTime() + 7 * 86400000).toISOString().split('T')[0]
       const todayStr = today.toISOString().split('T')[0]
 
-      const [dueRes, pendRes, newRes] = await Promise.all([
+
+      // 24 hours ago threshold for refill alerts
+      const cutoff24h = new Date(today.getTime() - 24 * 60 * 60 * 1000).toISOString()
+
+      const [dueRes, pendRes, newRes, refillRes] = await Promise.all([
         supabase.from('cards').select('id,bank_name,due_date,customer_id,customers(name)').lte('due_date', plus7).gte('due_date', todayStr).limit(5),
         supabase.from('transactions').select('id,sr_no,customer_name,total_amount,created_at').eq('remarks', 'PEND').order('sr_no', { ascending: false }).limit(5),
         supabase.from('transactions').select('id,sr_no,customer_name,total_amount,created_at').eq('date', todayStr).order('sr_no', { ascending: false }).limit(3),
+        // Refills older than 24h where the same customer has no swap on the same or later date
+        supabase.from('transactions').select('id,sr_no,customer_name,bank_card,total_amount,created_at,date').eq('entry_type', 'refill').lte('created_at', cutoff24h).order('created_at', { ascending: false }).limit(20),
       ])
 
       const notes: Notification[] = []
@@ -229,15 +235,50 @@ function NotificationsDropdown({ onClose }: { onClose: () => void }) {
         })
       })
 
+      // Refill alerts: refills >24h old — check if customer has a swap on/after refill date
+      const refills = (refillRes.data || []) as { id: string; sr_no: number; customer_name: string; bank_card: string; total_amount: number; created_at: string; date: string }[]
+      if (refills.length > 0) {
+        // Fetch all swaps for these customers to cross-check
+        const customerNames = [...new Set(refills.map(r => r.customer_name))]
+        const { data: swaps } = await supabase
+          .from('transactions')
+          .select('customer_name,date')
+          .eq('entry_type', 'swap')
+          .in('customer_name', customerNames)
+        const swapSet = new Set((swaps || []).map((s: { customer_name: string; date: string }) => `${s.customer_name}__${s.date}`))
+
+        refills.forEach(t => {
+          // If no swap exists for this customer on or after the refill date, alert
+          const hasSwap = (swaps || []).some((s: { customer_name: string; date: string }) =>
+            s.customer_name === t.customer_name && s.date >= t.date
+          )
+          void swapSet
+          if (!hasSwap) {
+            const hoursAgo = Math.floor((Date.now() - new Date(t.created_at).getTime()) / 3600000)
+            notes.push({
+              id: 'refill-' + t.id,
+              type: 'refill',
+              title: `⚠️ Card not swapped — ${t.customer_name}`,
+              subtitle: `Refilled ₹${t.total_amount.toLocaleString('en-IN')} (${t.bank_card || 'card'}) — ${hoursAgo}h ago, no swap yet`,
+              timeAgo: timeAgo(t.created_at),
+              read: false,
+            })
+          }
+        })
+      }
+
       setNotifications(notes)
     }
     load()
+    // Re-check every 24 hours while the app is open
+    const interval = setInterval(load, 24 * 60 * 60 * 1000)
+    return () => clearInterval(interval)
   }, [])
 
   const unread = notifications.filter(n => !readIds.has(n.id)).length
 
   function dotColor(type: Notification['type']) {
-    return type === 'due' ? '#ef4444' : type === 'pending' ? '#f59e0b' : '#3ECF8E'
+    return type === 'due' ? '#ef4444' : type === 'pending' ? '#f59e0b' : type === 'refill' ? '#8b5cf6' : '#3ECF8E'
   }
 
   return (
