@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { addSwapToAcSheet, updateAcSheetCashType } from '@/lib/ac-sheet'
-import { CheckCircle, Clock, RefreshCw, CreditCard, Wallet } from 'lucide-react'
+import { CheckCircle, Clock, RefreshCw, CreditCard, Wallet, Search, X } from 'lucide-react'
 
 interface Transaction {
   id: string
@@ -40,6 +40,14 @@ export default function SettlementPage() {
   const [releasing, setReleasing] = useState<string | null>(null)
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
   const isReleasingRef = useRef(false)
+
+  // SR search
+  const [srInput, setSrInput] = useState('')
+  const [srTxn, setSrTxn] = useState<Transaction | null>(null)
+  const [srSearching, setSrSearching] = useState(false)
+  const [srNotFound, setSrNotFound] = useState(false)
+  const [settlingPartial, setSettlingPartial] = useState(false)
+  const [partialAmount, setPartialAmount] = useState('')
 
   function showToast(msg: string, type: 'success' | 'error' = 'success') {
     setToast({ msg, type })
@@ -165,6 +173,59 @@ export default function SettlementPage() {
 
     setAcctPending(prev => prev.filter(t => t.id !== txn.id))
     showToast(`SR #${txn.sr_no} marked as fully paid across all sheets`)
+  }
+
+  async function searchBySr() {
+    if (!srInput.trim()) return
+    setSrSearching(true); setSrNotFound(false); setSrTxn(null); setPartialAmount('')
+    const { data } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('sr_no', parseInt(srInput))
+      .maybeSingle()
+    setSrSearching(false)
+    if (!data) { setSrNotFound(true); return }
+    setSrTxn(data as Transaction)
+  }
+
+  async function settleSrFull() {
+    if (!srTxn) return
+    const today = new Date().toISOString().split('T')[0]
+    const total = Number(srTxn.total_amount || 0)
+    setSettlingPartial(true)
+    const { error } = await supabase.from('transactions')
+      .update({ paid_amount: total, remarks: 'PAID', status: 'Paid' }).eq('id', srTxn.id)
+    if (error) { showToast('Failed: ' + error.message, 'error'); setSettlingPartial(false); return }
+    await supabase.from('customer_sheet').update({ paid_amount: total, paid_remaining: 0, paid_date: today }).eq('transaction_id', srTxn.id)
+    await supabase.from('commission_sheet').update({ status: 'Paid', paid_date: today, paid_amount: total }).eq('transaction_id', srTxn.id).eq('status', 'Pending')
+    setSrTxn(prev => prev ? { ...prev, paid_amount: total, remarks: 'PAID' } : prev)
+    setAcctPending(prev => prev.filter(t => t.id !== srTxn.id))
+    showToast(`SR #${srTxn.sr_no} fully settled`)
+    setSettlingPartial(false)
+  }
+
+  async function settleSrPartial() {
+    if (!srTxn || !partialAmount) return
+    const amt = parseFloat(partialAmount) || 0
+    if (amt <= 0) { showToast('Enter a valid amount', 'error'); return }
+    const prevPaid = Number(srTxn.paid_amount || 0)
+    const newPaid = prevPaid + amt
+    const total = Number(srTxn.total_amount || 0)
+    const fullyPaid = newPaid >= total
+    const today = new Date().toISOString().split('T')[0]
+    setSettlingPartial(true)
+    const { error } = await supabase.from('transactions')
+      .update({ paid_amount: newPaid, remarks: fullyPaid ? 'PAID' : 'PEND', status: fullyPaid ? 'Paid' : 'Pending' }).eq('id', srTxn.id)
+    if (error) { showToast('Failed: ' + error.message, 'error'); setSettlingPartial(false); return }
+    if (fullyPaid) {
+      await supabase.from('customer_sheet').update({ paid_amount: newPaid, paid_remaining: 0, paid_date: today }).eq('transaction_id', srTxn.id)
+      await supabase.from('commission_sheet').update({ status: 'Paid', paid_date: today, paid_amount: total }).eq('transaction_id', srTxn.id).eq('status', 'Pending')
+    }
+    setSrTxn(prev => prev ? { ...prev, paid_amount: newPaid, remarks: fullyPaid ? 'PAID' : 'PEND' } : prev)
+    if (fullyPaid) setAcctPending(prev => prev.filter(t => t.id !== srTxn.id))
+    setPartialAmount('')
+    showToast(fullyPaid ? `SR #${srTxn.sr_no} fully settled` : `₹${fmt(amt)} recorded — ₹${fmt(total - newPaid)} still pending`)
+    setSettlingPartial(false)
   }
 
   const swapSection = (
@@ -343,6 +404,109 @@ export default function SettlementPage() {
           style={{ borderColor: '#e5e7eb', color: '#6b7280' }}>
           <RefreshCw size={13} /> Refresh
         </button>
+      </div>
+
+      {/* SR Search */}
+      <div className="mb-6 rounded-xl border p-4" style={{ borderColor: '#e5e7eb', background: '#fafafa' }}>
+        <div className="flex items-center gap-2 mb-3">
+          <Search size={15} color="#6b7280" />
+          <span className="text-sm font-bold text-[#1a1a1a]">Search by SR Number</span>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            placeholder="Enter SR No..."
+            value={srInput}
+            onChange={e => { setSrInput(e.target.value); setSrTxn(null); setSrNotFound(false) }}
+            onKeyDown={e => e.key === 'Enter' && searchBySr()}
+            className="border rounded-lg px-3 py-2 text-sm outline-none focus:border-[#3ECF8E] w-40"
+            style={{ borderColor: '#e5e7eb' }}
+          />
+          <button onClick={searchBySr} disabled={srSearching}
+            className="px-4 py-2 rounded-lg text-sm font-semibold text-white"
+            style={{ background: '#3ECF8E', opacity: srSearching ? 0.6 : 1 }}>
+            {srSearching ? 'Searching…' : 'Search'}
+          </button>
+          {srTxn && (
+            <button onClick={() => { setSrTxn(null); setSrInput(''); setSrNotFound(false) }}
+              className="p-2 rounded-lg border hover:bg-gray-100"
+              style={{ borderColor: '#e5e7eb' }}>
+              <X size={14} color="#6b7280" />
+            </button>
+          )}
+        </div>
+
+        {srNotFound && (
+          <div className="mt-3 text-sm text-[#ef4444]">No transaction found for SR #{srInput}</div>
+        )}
+
+        {srTxn && (() => {
+          const total = Number(srTxn.total_amount || 0)
+          const paid = Number(srTxn.paid_amount || 0)
+          const pending = total - paid
+          const commAmt = Number(srTxn.commission_pct || 0) * total / 100
+          const isFullyPaid = srTxn.remarks === 'PAID' || paid >= total
+          return (
+            <div className="mt-3 rounded-xl border p-4" style={{ borderColor: isFullyPaid ? '#bbf7d0' : '#fecaca', background: isFullyPaid ? '#f0fdf4' : '#fff' }}>
+              {/* Header */}
+              <div className="flex items-center gap-3 flex-wrap mb-3">
+                <span className="font-bold text-[#1a1a1a]">{srTxn.customer_name}</span>
+                <span className="text-xs text-[#6b7280]">SR #{srTxn.sr_no}</span>
+                <span className="text-xs text-[#6b7280]">{fmtDate(srTxn.date)}</span>
+                {srTxn.bank_card && <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#f3f4f6] text-[#374151]">{srTxn.bank_card}</span>}
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                  style={{ background: isFullyPaid ? '#d1fae5' : '#fef9c3', color: isFullyPaid ? '#065f46' : '#92400e' }}>
+                  {isFullyPaid ? '✓ Settled' : srTxn.remarks}
+                </span>
+              </div>
+
+              {/* Amounts row */}
+              <div className="flex gap-6 text-sm mb-4 flex-wrap">
+                <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Total Amount</div><div className="font-bold">₹{fmt(total)}</div></div>
+                <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Paid</div><div className="font-bold" style={{ color: '#16a34a' }}>₹{fmt(paid)}</div></div>
+                <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Pending</div><div className="font-bold" style={{ color: pending > 0 ? '#dc2626' : '#16a34a' }}>₹{fmt(pending)}</div></div>
+                <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Commission</div><div className="font-bold" style={{ color: '#7c3aed' }}>{srTxn.commission_pct}% — ₹{fmt(Math.round(commAmt))}</div></div>
+                <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Comm Type</div><div className="font-bold text-[#374151]">{srTxn.commission_type}</div></div>
+              </div>
+
+              {!isFullyPaid && (
+                <div className="flex flex-col gap-3">
+                  {/* Full settle */}
+                  <div className="flex items-center gap-3">
+                    <button onClick={settleSrFull} disabled={settlingPartial}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold text-white"
+                      style={{ background: '#16a34a', opacity: settlingPartial ? 0.6 : 1 }}>
+                      <CheckCircle size={14} /> Settle Full Amount (₹{fmt(pending)})
+                    </button>
+                  </div>
+
+                  {/* Partial settle */}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      placeholder={`Partial amount (max ₹${fmt(pending)})`}
+                      value={partialAmount}
+                      onChange={e => setPartialAmount(e.target.value)}
+                      className="border rounded-lg px-3 py-2 text-sm outline-none focus:border-[#3ECF8E] w-56"
+                      style={{ borderColor: '#e5e7eb' }}
+                    />
+                    <button onClick={settleSrPartial} disabled={settlingPartial || !partialAmount}
+                      className="px-4 py-2 rounded-lg text-sm font-semibold text-white"
+                      style={{ background: '#f97316', opacity: (settlingPartial || !partialAmount) ? 0.6 : 1 }}>
+                      Settle Partial
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {isFullyPaid && (
+                <div className="flex items-center gap-2 text-sm text-[#16a34a] font-semibold">
+                  <CheckCircle size={15} /> All amounts settled for this transaction
+                </div>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       {loading ? (
