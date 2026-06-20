@@ -27,7 +27,6 @@ const navGroups = [
   [
     { icon: BellRing, label: 'Settlement', href: '/notifications', superOnly: false },
     { icon: Bell, label: 'Reminders', href: '/reminders', superOnly: false },
-    { icon: AlertTriangle, label: 'Risk Alerts', href: '/alerts', superOnly: false },
     { icon: BarChart2, label: 'Analytics', href: '/analytics', superOnly: false },
   ],
   [
@@ -40,7 +39,6 @@ export default function Sidebar() {
   const pathname = usePathname()
   const auth = useAuth()
   const isSuperAdmin = auth?.role === 'super_admin'
-  const [alertCount, setAlertCount] = useState(0)
   const [reminderCount, setReminderCount] = useState(0)
   const [pendingSwapCount, setPendingSwapCount] = useState(0)
   const isEntryActive = pathname.startsWith('/entry')
@@ -48,15 +46,6 @@ export default function Sidebar() {
 
   useEffect(() => {
     
-
-    const fetchAlertCount = async () => {
-      const { count } = await supabase
-        .from('risk_alerts')
-        .select('id', { count: 'exact', head: true })
-        .eq('is_dismissed', false)
-        .eq('severity', 'high')
-      setAlertCount(count ?? 0)
-    }
 
     const fetchReminderCount = async () => {
       const today = new Date().toISOString().split('T')[0]
@@ -79,13 +68,11 @@ export default function Sidebar() {
       setPendingSwapCount(pending.length)
     }
 
-    fetchAlertCount()
     fetchReminderCount()
     fetchPendingSwapCount()
 
     const channel = supabase
       .channel('sidebar_counts')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'risk_alerts' }, fetchAlertCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, fetchReminderCount)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'transactions' }, fetchPendingSwapCount)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'swap_releases' }, fetchPendingSwapCount)
@@ -122,7 +109,6 @@ export default function Sidebar() {
             <div key={gi}>
               {visibleItems.map(({ icon: Icon, label, href }) => {
                 const active = pathname === href
-                const isAlerts = href === '/alerts'
                 return (
                   <Link
                     key={href}
@@ -144,11 +130,6 @@ export default function Sidebar() {
                   >
                     <Icon size={20} color={active ? '#3ECF8E' : '#9ca3af'} style={{ flexShrink: 0 }} />
                     <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{label}</span>
-                    {isAlerts && alertCount > 0 && (
-                      <span style={{ background: '#ef4444', color: 'white', borderRadius: '999px', padding: '1px 6px', fontSize: '10px', fontWeight: 700, lineHeight: '16px', flexShrink: 0 }}>
-                        {alertCount > 99 ? '99+' : alertCount}
-                      </span>
-                    )}
                     {href === '/reminders' && reminderCount > 0 && (
                       <span style={{ background: '#f59e0b', color: 'white', borderRadius: '999px', padding: '1px 6px', fontSize: '10px', fontWeight: 700, lineHeight: '16px', flexShrink: 0 }}>
                         {reminderCount > 99 ? '99+' : reminderCount}
