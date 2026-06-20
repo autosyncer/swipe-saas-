@@ -325,10 +325,13 @@ function AccountPanel({
                   {form.mobile_banking_enabled && (
                     <div className="flex flex-col gap-2">
                       {([
-                        { app: 'PhonePe', key: 'phonepay', color: '#5f259f', bg: '#f5f0fb', emoji: '📱' },
-                        { app: 'Google Pay', key: 'googlepay', color: '#1a73e8', bg: '#f0f6ff', emoji: '💳' },
-                        { app: 'Paytm', key: 'paytm', color: '#002970', bg: '#f0f4ff', emoji: '🔵' },
-                      ] as const).map(({ app, key, color, bg, emoji }) => {
+                        { app: 'PhonePe', key: 'phonepay', color: '#5f259f', bg: '#f5f0fb',
+                          icon: <svg width="20" height="20" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#5f259f"/><path d="M27 14h-5.5l-6 12h3.5l1.2-2.5H25l.3 2.5H29L27 14zm-5.5 7l2-4.2.5 4.2h-2.5z" fill="#fff"/><circle cx="14" cy="20" r="3" fill="#9b59b6"/></svg> },
+                        { app: 'Google Pay', key: 'googlepay', color: '#1a73e8', bg: '#f0f6ff',
+                          icon: <svg width="20" height="20" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#fff" stroke="#e5e7eb"/><text x="4" y="28" fontSize="22" fontFamily="Arial,sans-serif" fontWeight="bold"><tspan fill="#4285F4">G</tspan><tspan fill="#EA4335">o</tspan><tspan fill="#FBBC05">o</tspan><tspan fill="#4285F4">g</tspan><tspan fill="#34A853">l</tspan><tspan fill="#EA4335">e</tspan></text></svg> },
+                        { app: 'Paytm', key: 'paytm', color: '#00BAF2', bg: '#f0faff',
+                          icon: <svg width="20" height="20" viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="10" fill="#00BAF2"/><rect x="8" y="14" width="24" height="12" rx="2" fill="#fff"/><text x="20" y="24" fontSize="9" fontFamily="Arial,sans-serif" fontWeight="bold" fill="#00BAF2" textAnchor="middle">PAYTM</text></svg> },
+                      ] as const).map(({ app, key, color, bg, icon }) => {
                         const isSelected = form.mobile_banking_app === app
                         const phoneKey = `mb_${key}_phone` as keyof typeof form
                         const upiKey = `mb_${key}_upi` as keyof typeof form
@@ -340,7 +343,7 @@ function AccountPanel({
                               className="w-full flex items-center gap-2 px-3 py-2.5 text-left"
                               style={{ background: isSelected ? bg : '#fafafa', transition: 'background 0.2s' }}
                             >
-                              <span style={{ fontSize: 16 }}>{emoji}</span>
+                              {icon}
                               <span style={{ fontSize: 12, fontWeight: 700, color: isSelected ? color : '#374151' }}>{app}</span>
                               <span style={{ marginLeft: 'auto', width: 16, height: 16, borderRadius: '50%', border: `2px solid ${isSelected ? color : '#d1d5db'}`, background: isSelected ? color : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                                 {isSelected && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff', display: 'block' }} />}
