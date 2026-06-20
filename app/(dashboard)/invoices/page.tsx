@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth-context'
 import { logAction } from '@/lib/audit-log'
 import { Receipt, Plus, Search, Eye, X, Printer, CheckCircle, Clock, Ban, FileText, Settings } from 'lucide-react'
 import InvoiceDocument from '@/components/invoice/InvoiceDocument'
-import { StoreSettings, DEFAULT_STORE, loadStoreSettings, saveStoreSettings } from '@/lib/store-settings'
+import { StoreSettings } from '@/lib/store-settings'
 
 interface InvoiceItem {
   commodity_id: string
@@ -86,10 +86,13 @@ export default function InvoicesPage() {
   const [invoiceNotes, setInvoiceNotes] = useState('')
   const [creating, setCreating] = useState(false)
 
-  // Store details (localStorage)
-  const [storeSettings, setStoreSettings] = useState<StoreSettings>(loadStoreSettings())
-  const [showStoreSettings, setShowStoreSettings] = useState(false)
-  const [storeDraft, setStoreDraft] = useState<StoreSettings>(loadStoreSettings())
+  // Store profiles (DB)
+  const [stores, setStores] = useState<{ id: string; name: string; address: string; jurisdiction: string; gst_no: string; bank_name: string; acc_no: string; ifsc: string }[]>([])
+  const [showManageStores, setShowManageStores] = useState(false)
+  const [storeDraft, setStoreDraft] = useState({ name: '', address: '', jurisdiction: '', gst_no: '', bank_name: '', acc_no: '', ifsc: '' })
+  const [editStoreId, setEditStoreId] = useState<string | null>(null)
+  const [savingStore, setSavingStore] = useState(false)
+  const [selStore, setSelStore] = useState('')
 
   // Bank accounts
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
@@ -97,6 +100,7 @@ export default function InvoicesPage() {
 
   // Inline bank picker on invoice row
   const [pickerInvoiceId, setPickerInvoiceId] = useState<string | null>(null)
+  const [pickerStore, setPickerStore] = useState('')
   const [pickerBank, setPickerBank] = useState('')
   const [savingPicker, setSavingPicker] = useState(false)
 
@@ -115,8 +119,14 @@ export default function InvoicesPage() {
     setLoading(false)
   }
 
+  async function fetchStores() {
+    const { data } = await supabase.from('invoice_stores').select('id,name,address,jurisdiction,gst_no,bank_name,acc_no,ifsc').order('name')
+    setStores(data ?? [])
+  }
+
   useEffect(() => {
     fetchInvoices()
+    fetchStores()
     Promise.all([
       supabase.from('commodities').select('id,name,unit,current_price').eq('is_active', true).order('name'),
       supabase.from('customers').select('id,name').order('name'),
@@ -147,6 +157,41 @@ export default function InvoicesPage() {
   const taxAmt = subtotalCalc * (parseFloat(taxPercent) || 0) / 100
   const totalCalc = subtotalCalc + taxAmt
 
+  async function saveStore() {
+    if (!storeDraft.name.trim()) { showToast('Store name is required', 'error'); return }
+    setSavingStore(true)
+    if (editStoreId) {
+      await supabase.from('invoice_stores').update(storeDraft).eq('id', editStoreId)
+    } else {
+      await supabase.from('invoice_stores').insert(storeDraft)
+    }
+    await fetchStores()
+    setStoreDraft({ name: '', address: '', jurisdiction: '', gst_no: '', bank_name: '', acc_no: '', ifsc: '' })
+    setEditStoreId(null)
+    setSavingStore(false)
+    showToast(editStoreId ? 'Store updated' : 'Store added')
+  }
+
+  async function deleteStore(id: string) {
+    await supabase.from('invoice_stores').delete().eq('id', id)
+    await fetchStores()
+    if (selStore === id) setSelStore('')
+    showToast('Store deleted')
+  }
+
+  function resolveStoreSettings(inv: Invoice): StoreSettings {
+    const store = stores.find(s => s.id === inv.store_id)
+    const bank = bankAccounts.find(b => b.id === (inv.bank_account_id as string))
+    return {
+      name: store?.name ?? '',
+      address: store?.address ?? '',
+      jurisdiction: store?.jurisdiction ?? '',
+      bankName: store?.bank_name ?? bank?.bank_name ?? '',
+      accNo: store?.acc_no ?? bank?.account_number_masked ?? '',
+      ifsc: store?.ifsc ?? bank?.ifsc ?? '',
+    }
+  }
+
   async function handleCreate() {
     if (!selCustomer) { showToast('Select a customer', 'error'); return }
     const validItems = items.filter(i => i.name && i.qty > 0 && i.price >= 0)
@@ -165,6 +210,7 @@ export default function InvoicesPage() {
       total_amount: totalCalc,
       notes: invoiceNotes.trim() || null,
       status: 'draft',
+      store_id: selStore || null,
       bank_account_id: selBank || null,
     }).select().single()
     if (error) showToast('Failed to create invoice', 'error')
@@ -182,12 +228,14 @@ export default function InvoicesPage() {
 
   function openPicker(inv: Invoice) {
     setPickerInvoiceId(inv.id)
+    setPickerStore((inv.store_id as string) ?? '')
     setPickerBank((inv.bank_account_id as string) ?? '')
   }
 
   async function savePickerDetails(invId: string) {
     setSavingPicker(true)
     await supabase.from('invoices').update({
+      store_id: pickerStore || null,
       bank_account_id: pickerBank || null,
     }).eq('id', invId)
     await fetchInvoices()
@@ -212,19 +260,13 @@ export default function InvoicesPage() {
     win.document.close(); win.print()
   }
 
-  // Store management
-
-  // Resolve store settings for invoice display
-  function resolveStoreSettings(): StoreSettings {
-    return storeSettings
-  }
-
   const filtered = invoices.filter(inv =>
     (inv.invoice_number.toLowerCase().includes(search.toLowerCase()) || inv.customer_name.toLowerCase().includes(search.toLowerCase()))
     && (filterStatus === 'all' || inv.status === filterStatus)
   )
 
   const selectedBankObj = bankAccounts.find(b => b.id === selBank)
+  const selectedStoreObj = stores.find(s => s.id === selStore)
 
   return (
     <div className="p-6 max-w-5xl mx-auto">
@@ -248,9 +290,9 @@ export default function InvoicesPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => { setShowStoreSettings(v => !v); setStoreDraft(storeSettings) }}
+          <button onClick={() => setShowManageStores(v => !v)}
             className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border border-[#e5e7eb] text-[#374151] hover:bg-gray-50">
-            <Settings size={14} /> Store Details
+            <Settings size={14} /> Manage Stores
           </button>
           <button onClick={() => setShowCreate(v => !v)}
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white"
@@ -260,42 +302,77 @@ export default function InvoicesPage() {
         </div>
       </div>
 
-      {/* Store Details Panel */}
-      {showStoreSettings && (
+      {/* Manage Stores Panel */}
+      {showManageStores && (
         <div className="rounded-xl p-5 mb-5 border border-[#e5e7eb] bg-white shadow-sm">
-          <h3 className="text-sm font-semibold text-[#111] mb-4">Store Details</h3>
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <div>
-              <label className={lbl}>Store Name</label>
-              <input className={inp} value={storeDraft.name} onChange={e => setStoreDraft(p => ({ ...p, name: e.target.value }))} placeholder="Mahalaxmi Grain Store" />
+          <h3 className="text-sm font-semibold text-[#111] mb-4">Manage Stores</h3>
+
+          {/* Existing stores */}
+          {stores.length > 0 && (
+            <div className="mb-4 space-y-2">
+              {stores.map(s => (
+                <div key={s.id} className="flex items-start justify-between p-3 rounded-lg border border-[#e5e7eb] bg-[#f9fafb]">
+                  <div className="text-xs space-y-0.5">
+                    <div className="font-semibold text-sm text-[#111]">{s.name}</div>
+                    {s.address && <div className="text-[#6b7280] whitespace-pre-line">{s.address}</div>}
+                    {s.gst_no && <div className="text-[#6b7280]">GST: {s.gst_no}</div>}
+                    {s.bank_name && <div className="text-[#374151]">Bank: {s.bank_name}</div>}
+                    {s.acc_no && <div className="text-[#374151]">A/C: {s.acc_no}</div>}
+                    {s.ifsc && <div className="text-[#374151]">IFSC: {s.ifsc}</div>}
+                    {s.jurisdiction && <div className="text-[#9ca3af]">{s.jurisdiction}</div>}
+                  </div>
+                  <div className="flex gap-2 ml-4 shrink-0">
+                    <button onClick={() => { setStoreDraft({ name: s.name, address: s.address, jurisdiction: s.jurisdiction, gst_no: s.gst_no, bank_name: s.bank_name, acc_no: s.acc_no, ifsc: s.ifsc }); setEditStoreId(s.id) }}
+                      className="text-xs px-2 py-1 rounded border border-[#e5e7eb] text-[#374151] hover:bg-white">Edit</button>
+                    <button onClick={() => deleteStore(s.id)} className="text-[#ef4444]"><X size={14} /></button>
+                  </div>
+                </div>
+              ))}
             </div>
-            <div>
-              <label className={lbl}>Bank Name</label>
-              <input className={inp} value={storeDraft.bankName} onChange={e => setStoreDraft(p => ({ ...p, bankName: e.target.value }))} placeholder="e.g. BANK OF BARODA CA" />
+          )}
+
+          {/* Add/Edit form */}
+          <div className="border-t border-[#e5e7eb] pt-4">
+            <div className="text-xs font-semibold text-[#374151] mb-3">{editStoreId ? 'Edit Store' : 'Add Store'}</div>
+            <div className="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className={lbl}>Store Name *</label>
+                <input className={inp} value={storeDraft.name} onChange={e => setStoreDraft(p => ({ ...p, name: e.target.value }))} placeholder="Mahalaxmi Grain Store" />
+              </div>
+              <div>
+                <label className={lbl}>GST No.</label>
+                <input className={inp} value={storeDraft.gst_no} onChange={e => setStoreDraft(p => ({ ...p, gst_no: e.target.value.toUpperCase() }))} placeholder="27AAAAA0000A1Z5" />
+              </div>
+              <div className="col-span-2">
+                <label className={lbl}>Store Address</label>
+                <textarea className={inp} rows={2} value={storeDraft.address} onChange={e => setStoreDraft(p => ({ ...p, address: e.target.value }))} placeholder="Shop No., Area, City" />
+              </div>
+              <div>
+                <label className={lbl}>Store Bank Name</label>
+                <input className={inp} value={storeDraft.bank_name} onChange={e => setStoreDraft(p => ({ ...p, bank_name: e.target.value }))} placeholder="BANK OF BARODA CA" />
+              </div>
+              <div>
+                <label className={lbl}>Store A/c No.</label>
+                <input className={inp} value={storeDraft.acc_no} onChange={e => setStoreDraft(p => ({ ...p, acc_no: e.target.value }))} placeholder="028102000002596" />
+              </div>
+              <div>
+                <label className={lbl}>Branch &amp; IFSC Code</label>
+                <input className={inp} value={storeDraft.ifsc} onChange={e => setStoreDraft(p => ({ ...p, ifsc: e.target.value }))} placeholder="UDHNA SURAT & BARB0UDHNAX" />
+              </div>
+              <div>
+                <label className={lbl}>Jurisdiction</label>
+                <input className={inp} value={storeDraft.jurisdiction} onChange={e => setStoreDraft(p => ({ ...p, jurisdiction: e.target.value }))} placeholder="SUBJECT TO SURAT JURISDICTION" />
+              </div>
             </div>
-            <div>
-              <label className={lbl}>Account No.</label>
-              <input className={inp} value={storeDraft.accNo} onChange={e => setStoreDraft(p => ({ ...p, accNo: e.target.value }))} placeholder="Account Number" />
+            <div className="flex gap-2">
+              {editStoreId && <button onClick={() => { setStoreDraft({ name: '', address: '', jurisdiction: '', gst_no: '', bank_name: '', acc_no: '', ifsc: '' }); setEditStoreId(null) }}
+                className="px-3 py-1.5 rounded-lg text-sm border border-[#e5e7eb] text-[#374151]">Cancel</button>}
+              <button onClick={saveStore} disabled={savingStore}
+                className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
+                style={{ background: '#3ECF8E' }}>
+                {savingStore ? 'Saving...' : editStoreId ? 'Update Store' : 'Add Store'}
+              </button>
             </div>
-            <div>
-              <label className={lbl}>Branch &amp; IFSC</label>
-              <input className={inp} value={storeDraft.ifsc} onChange={e => setStoreDraft(p => ({ ...p, ifsc: e.target.value }))} placeholder="Branch & IFSC Code" />
-            </div>
-            <div>
-              <label className={lbl}>Jurisdiction</label>
-              <input className={inp} value={storeDraft.jurisdiction} onChange={e => setStoreDraft(p => ({ ...p, jurisdiction: e.target.value }))} placeholder="SUBJECT TO SURAT JURISDICTION" />
-            </div>
-            <div className="col-span-2">
-              <label className={lbl}>Store Address</label>
-              <textarea className={inp} rows={2} value={storeDraft.address} onChange={e => setStoreDraft(p => ({ ...p, address: e.target.value }))} placeholder="Shop No., Area, City" />
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setShowStoreSettings(false)}
-              className="px-3 py-1.5 rounded-lg text-sm border border-[#e5e7eb] text-[#374151] hover:bg-gray-50">Cancel</button>
-            <button onClick={() => { saveStoreSettings(storeDraft); setStoreSettings(storeDraft); setShowStoreSettings(false); showToast('Store details saved') }}
-              className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white"
-              style={{ background: '#3ECF8E' }}>Save</button>
           </div>
         </div>
       )}
@@ -306,7 +383,21 @@ export default function InvoicesPage() {
           <h3 className="text-sm font-semibold text-[#111] mb-4">Create Invoice</h3>
 
           {/* Bank + Customer row */}
-          <div className="grid grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div>
+              <label className={lbl}>Select Store</label>
+              <select className={inp} value={selStore} onChange={e => setSelStore(e.target.value)}>
+                <option value="">— No store —</option>
+                {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              {selectedStoreObj && (
+                <div className="mt-1.5 px-2 py-1.5 rounded-lg text-xs text-[#374151] border border-[#e5e7eb] bg-[#f9fafb] space-y-0.5">
+                  {selectedStoreObj.address && <div className="whitespace-pre-line">{selectedStoreObj.address}</div>}
+                  {selectedStoreObj.bank_name && <div>Bank: {selectedStoreObj.bank_name}</div>}
+                  {selectedStoreObj.acc_no && <div className="text-[#6b7280]">A/C: {selectedStoreObj.acc_no}</div>}
+                </div>
+              )}
+            </div>
             <div>
               <label className={lbl}>Select Bank Account</label>
               <select className={inp} value={selBank} onChange={e => setSelBank(e.target.value)}>
@@ -491,6 +582,17 @@ export default function InvoicesPage() {
                       <td colSpan={6} className="px-4 py-3">
                         <div className="flex items-end gap-4">
                           <div style={{ flex: 1 }}>
+                            <label className={lbl}>Select Store</label>
+                            <select className={inp} value={pickerStore} onChange={e => setPickerStore(e.target.value)}>
+                              <option value="">— No store —</option>
+                              {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                            {pickerStore && stores.find(s => s.id === pickerStore) && (() => {
+                              const s = stores.find(s => s.id === pickerStore)!
+                              return <div className="mt-1 text-xs text-[#6b7280]">{s.address}</div>
+                            })()}
+                          </div>
+                          <div style={{ flex: 1 }}>
                             <label className={lbl}>Select Bank Account</label>
                             <select className={inp} value={pickerBank} onChange={e => setPickerBank(e.target.value)}>
                               <option value="">— No bank —</option>
@@ -564,7 +666,7 @@ export default function InvoicesPage() {
                 totalAmount={Number(detailInvoice.total_amount)}
                 remarks={detailInvoice.notes}
                 paidBy={detailInvoice.paid_by ?? ''}
-                storeSettings={resolveStoreSettings()}
+                storeSettings={resolveStoreSettings(detailInvoice)}
               />
             </div>
           </div>
