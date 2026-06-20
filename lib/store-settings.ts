@@ -5,6 +5,7 @@ export interface StoreSettings {
   accNo: string
   ifsc: string
   jurisdiction: string
+  gstNo?: string
 }
 
 const KEY = 'swipe_store_settings'

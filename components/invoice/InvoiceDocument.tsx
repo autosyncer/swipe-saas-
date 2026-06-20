@@ -164,6 +164,7 @@ export default function InvoiceDocument({
   const [accNo,       setAccNo]       = useState(store.accNo)
   const [ifsc,        setIfsc]        = useState(store.ifsc)
   const [jurisdiction,setJurisdiction]= useState(store.jurisdiction)
+  const [gstNo,       setGstNo]       = useState(store.gstNo ?? '')
 
   // Computed totals from rows
   const computedRows = rows.map(r => {
@@ -221,6 +222,7 @@ export default function InvoiceDocument({
               <td rowSpan={3} style={{ ...cellTop({ width: '38%' }), borderRight: B }}>
                 <div style={{ fontWeight: 'bold', fontSize: 12, fontFamily: F }}>{companyName}</div>
                 {companyAddr.split('\n').map((l, i) => <div key={i} style={{ fontFamily: F, fontSize: 11 }}>{l}</div>)}
+                {gstNo && <div style={{ fontFamily: F, fontSize: 11, marginTop: 2 }}>GSTIN: {gstNo}</div>}
               </td>
               <td style={{ ...cell({ width: '16%', color: '#444' }), borderRight: B }}>Invoice No.</td>
               <td style={{ ...cell({ width: '18%' }), borderRight: B }}>

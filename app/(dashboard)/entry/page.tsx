@@ -576,7 +576,22 @@ function EntryPageInner() {
       }
 
 
-      // Step 4: Build insert payload
+      // Step 4: Fetch store details from bank_account_master via account_name
+      let storeDetails: Record<string, string | null> = {
+        store_name: null, store_address: null, store_bank_name: null,
+        store_acc_no: null, store_branch_ifsc: null, store_gst_no: null,
+      }
+      const accountName = (transaction.account_name as string) || (transaction.bank_card as string) || ''
+      if (accountName) {
+        const { data: bam } = await supabase
+          .from('bank_account_master')
+          .select('store_name,store_address,store_bank_name,store_acc_no,store_branch_ifsc,store_gst_no')
+          .ilike('account_name', accountName)
+          .maybeSingle()
+        if (bam) storeDetails = bam
+      }
+
+      // Step 5: Build insert payload
       const subtotal = validItems.reduce((s, i) => s + i.subtotal, 0)
       const swapTotal = Number(transaction.swap_amount) || 0
       const invoiceTotal = swapTotal > 0 ? swapTotal : subtotal
@@ -616,6 +631,7 @@ function EntryPageInner() {
         status: 'draft',
         store_id: null,
         bank_account_id: null,
+        ...storeDetails,
       }
       console.log('[invoice] inserting:', insertPayload)
 

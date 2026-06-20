@@ -177,15 +177,17 @@ export default function InvoicesPage() {
   }
 
   function resolveStoreSettings(inv: Invoice): StoreSettings {
+    const r = inv as unknown as Record<string, string>
     const store = stores.find(s => s.id === inv.store_id)
     const bank = bankAccounts.find(b => b.id === (inv.bank_account_id as string))
     return {
-      name: store?.name ?? '',
-      address: store?.address ?? '',
-      jurisdiction: store?.jurisdiction ?? '',
-      bankName: store?.bank_name ?? bank?.bank_name ?? '',
-      accNo: store?.acc_no ?? bank?.account_number_masked ?? '',
-      ifsc: store?.ifsc ?? bank?.ifsc ?? '',
+      name: r.store_name || store?.name || '',
+      address: r.store_address || store?.address || '',
+      jurisdiction: store?.jurisdiction || '',
+      bankName: r.store_bank_name || store?.bank_name || bank?.bank_name || '',
+      accNo: r.store_acc_no || store?.acc_no || bank?.account_number_masked || '',
+      ifsc: r.store_branch_ifsc || store?.ifsc || bank?.ifsc || '',
+      gstNo: r.store_gst_no || store?.gst_no || '',
     }
   }
 
