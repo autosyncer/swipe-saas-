@@ -249,7 +249,6 @@ function EntryPageInner() {
         setCommodityItems([{ commodity_id: first.id, name: first.name, unit: first.unit || 'pcs', qty: 1, price, subtotal: price }])
       }
     })
-    supabase.from('bank_accounts').select('id,account_name,bank_name,account_number_masked,ifsc').order('account_name').then(({ data }) => setInvoiceBanks(data ?? []))
   }, [])
 
   // ── Prefill customer from URL params (coming from Reminders) ──

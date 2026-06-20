@@ -7,7 +7,6 @@ import {
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { logAction } from '@/lib/audit-log'
-import { loadStoreSettings, saveStoreSettings, StoreSettings } from '@/lib/store-settings'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface BankAccount {
@@ -143,12 +142,12 @@ function AccountPanel({
   const [machine, setMachine] = useState<SwipeMachineLinked>({ ...EMPTY_MACHINE })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [storeDetails, setStoreDetails] = useState<StoreSettings>(() =>
-    initial ? loadStoreSettings() : loadStoreSettings()
-  )
-  function setSD(k: keyof StoreSettings, v: string) {
-    setStoreDetails(s => ({ ...s, [k]: v }))
-  }
+  const [invoiceStores, setInvoiceStores] = useState<{ id: string; name: string; address: string; jurisdiction: string; gst_no: string }[]>([])
+  const [selStoreId, setSelStoreId] = useState('')
+
+  useEffect(() => {
+    supabase.from('invoice_stores').select('id,name,address,jurisdiction,gst_no').order('name').then(({ data }) => setInvoiceStores(data ?? []))
+  }, [])
 
   // On edit mode, fetch linked machine
   useEffect(() => {
@@ -210,9 +209,6 @@ function AccountPanel({
       setError(dbError.code === '23505' ? 'Account name already exists' : dbError.message)
       return
     }
-
-    // Save store details to localStorage
-    saveStoreSettings(storeDetails)
 
     // Save linked swipe machine
     if (machine.machine_name.trim() && machine.tid.trim()) {
@@ -439,45 +435,23 @@ function AccountPanel({
                 {/* Store Details */}
                 <div className="mt-4">
                   <div className="text-[10px] font-bold text-[#9ca3af] uppercase tracking-widest mb-3 pb-1 border-b border-[#f3f4f6]">Store Details</div>
-                  <div className="space-y-3">
-                    <div>
-                      <Label>Store Name</Label>
-                      <input className={inp()} value={storeDetails.name}
-                        onChange={e => setSD('name', e.target.value)}
-                        placeholder="e.g. Mahalaxmi Grain Store" />
-                    </div>
-                    <div>
-                      <Label>Store Address</Label>
-                      <textarea className={inp('resize-none')} rows={3} value={storeDetails.address}
-                        onChange={e => setSD('address', e.target.value)}
-                        placeholder="Shop No., Area, City" />
-                    </div>
-                    <div>
-                      <Label>Store Bank Name</Label>
-                      <input className={inp()} value={storeDetails.bankName}
-                        onChange={e => setSD('bankName', e.target.value)}
-                        placeholder="e.g. BANK OF BARODA CA" />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label>Store A/c No.</Label>
-                        <input className={inp()} value={storeDetails.accNo}
-                          onChange={e => setSD('accNo', e.target.value)}
-                          placeholder="Account Number" />
-                      </div>
-                      <div>
-                        <Label>Branch &amp; IFSC</Label>
-                        <input className={inp()} value={storeDetails.ifsc}
-                          onChange={e => setSD('ifsc', e.target.value)}
-                          placeholder="Branch & IFSC Code" />
-                      </div>
-                    </div>
-                    <div>
-                      <Label>Jurisdiction</Label>
-                      <input className={inp()} value={storeDetails.jurisdiction}
-                        onChange={e => setSD('jurisdiction', e.target.value)}
-                        placeholder="SUBJECT TO SURAT JURISDICTION" />
-                    </div>
+                  <div>
+                    <Label>Select Store</Label>
+                    <select className={inp()} value={selStoreId} onChange={e => setSelStoreId(e.target.value)}>
+                      <option value="">— No store —</option>
+                      {invoiceStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                    {selStoreId && (() => {
+                      const s = invoiceStores.find(x => x.id === selStoreId)
+                      if (!s) return null
+                      return (
+                        <div className="mt-2 p-2 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] text-xs text-[#374151] space-y-0.5">
+                          {s.address && <div className="whitespace-pre-line">{s.address}</div>}
+                          {s.gst_no && <div className="text-[#6b7280]">GST: {s.gst_no}</div>}
+                          {s.jurisdiction && <div className="text-[#9ca3af]">{s.jurisdiction}</div>}
+                        </div>
+                      )
+                    })()}
                   </div>
                 </div>
               </div>
