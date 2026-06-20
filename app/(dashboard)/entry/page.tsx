@@ -131,7 +131,9 @@ function EntryPageInner() {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [showCustDrop, setShowCustDrop] = useState(false)
   const custRef = useRef<HTMLDivElement>(null)
-  const [pendingTxns, setPendingTxns] = useState<{ id: string; sr_no: number; date: string; total_amount: number; remarks: string; entry_type: string }[]>([])
+  const [pendingTxns, setPendingTxns] = useState<{ id: string; sr_no: number; date: string; total_amount: number; paid_amount: number | null; commission_pct: number; commission_amount: number; commission_type: string; account_name: string; bank_card: string; swap_name: string; remarks: string; entry_type: string }[]>([])
+  const [expandedPendingId, setExpandedPendingId] = useState<string | null>(null)
+  const [partialPayInput, setPartialPayInput] = useState<Record<string, string>>({})
 
   // Customer cards
   const [customerCards, setCustomerCards] = useState<Card[]>([])
@@ -388,12 +390,12 @@ function EntryPageInner() {
     // Fetch pending / unsettled transactions for this customer
     const { data: pendData } = await supabase
       .from('transactions')
-      .select('id, sr_no, date, total_amount, remarks, entry_type')
+      .select('id, sr_no, date, total_amount, paid_amount, commission_pct, commission_amount, commission_type, account_name, bank_card, swap_name, remarks, entry_type')
       .eq('customer_name', c.name)
       .in('remarks', ['PEND', 'UNPAID', 'PURU'])
       .order('date', { ascending: false })
       .limit(10)
-    setPendingTxns((pendData || []) as { id: string; sr_no: number; date: string; total_amount: number; remarks: string; entry_type: string }[])
+    setPendingTxns((pendData || []) as typeof pendingTxns)
 
     // Fetch customer's cards
     console.log('[cards] fetching for customer_id:', c.id)
@@ -957,34 +959,99 @@ function EntryPageInner() {
                 const labelMap: Record<string, string> = { PEND: 'Pending', UNPAID: 'Unpaid', PURU: 'Puru' }
                 const colorMap: Record<string, string> = { PEND: '#f59e0b', UNPAID: '#ef4444', PURU: '#8b5cf6' }
                 const typeLabel = t.entry_type === 'refill' ? 'Card Refill' : 'Card Swap'
+                const isExpanded = expandedPendingId === t.id
+                const paid = Number(t.paid_amount || 0)
+                const total = Number(t.total_amount || 0)
+                const pendingAmt = total - paid
+                const today = new Date().toISOString().split('T')[0]
                 return (
-                  <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, flexWrap: 'wrap' }}>
-                    <span style={{ background: colorMap[t.remarks] || '#f59e0b', color: '#fff', padding: '1px 6px', borderRadius: 4, fontWeight: 700, fontSize: 10, flexShrink: 0 }}>
-                      {labelMap[t.remarks] || t.remarks}
-                    </span>
-                    <span style={{ color: '#6b7280', flexShrink: 0 }}>SR #{t.sr_no}</span>
-                    <span style={{ color: '#374151', fontWeight: 600 }}>₹{Number(t.total_amount).toLocaleString('en-IN')}</span>
-                    <span style={{ color: '#9ca3af', flexShrink: 0 }}>{t.date}</span>
-                    <span style={{ color: '#6b7280', fontSize: 10, flexShrink: 0 }}>({typeLabel})</span>
-                    <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          await supabase.from('transactions').update({ remarks: 'PAID', status: 'Paid' }).eq('id', t.id)
-                          setPendingTxns(prev => prev.filter(x => x.id !== t.id))
-                        }}
-                        style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
-                      >
-                        ✓ Settle
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => router.push(`/sheets?sheet=daily_register&sr=${t.sr_no}&date=${t.date}`)}
-                        style={{ background: '#eff6ff', color: '#1e40af', border: '1px solid #bfdbfe', borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
-                      >
-                        View →
-                      </button>
+                  <div key={t.id} style={{ background: '#fff', borderRadius: 6, border: '1px solid #fecaca', overflow: 'hidden' }}>
+                    {/* Row summary */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, padding: '6px 8px', flexWrap: 'wrap' }}>
+                      <span style={{ background: colorMap[t.remarks] || '#f59e0b', color: '#fff', padding: '1px 6px', borderRadius: 4, fontWeight: 700, fontSize: 10, flexShrink: 0 }}>
+                        {labelMap[t.remarks] || t.remarks}
+                      </span>
+                      <span style={{ color: '#6b7280', flexShrink: 0 }}>SR #{t.sr_no}</span>
+                      <span style={{ color: '#374151', fontWeight: 600 }}>₹{total.toLocaleString('en-IN')}</span>
+                      <span style={{ color: '#9ca3af', flexShrink: 0 }}>{t.date}</span>
+                      <span style={{ color: '#6b7280', fontSize: 10, flexShrink: 0 }}>({typeLabel})</span>
+                      <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+                        <button type="button"
+                          onClick={() => setExpandedPendingId(isExpanded ? null : t.id)}
+                          style={{ background: '#eff6ff', color: '#1e40af', border: '1px solid #bfdbfe', borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
+                          {isExpanded ? 'Hide ▲' : 'Details ▼'}
+                        </button>
+                        <button type="button"
+                          onClick={async () => {
+                            await supabase.from('transactions').update({ paid_amount: total, remarks: 'PAID', status: 'Paid' }).eq('id', t.id)
+                            setPendingTxns(prev => prev.filter(x => x.id !== t.id))
+                          }}
+                          style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
+                          ✓ Settle
+                        </button>
+                      </div>
                     </div>
+
+                    {/* Expanded detail */}
+                    {isExpanded && (
+                      <div style={{ borderTop: '1px solid #fecaca', padding: '10px 12px', background: '#fffbfb' }}>
+                        {/* Detail grid */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px 16px', marginBottom: 10 }}>
+                          {[
+                            { label: 'Total Amount', value: `₹${total.toLocaleString('en-IN')}`, color: '#1a1a1a' },
+                            { label: 'Paid', value: `₹${paid.toLocaleString('en-IN')}`, color: '#16a34a' },
+                            { label: 'Pending', value: `₹${pendingAmt.toLocaleString('en-IN')}`, color: '#dc2626' },
+                            { label: 'Commission', value: `${t.commission_pct}% — ₹${Math.round(Number(t.commission_amount || 0)).toLocaleString('en-IN')}`, color: '#7c3aed' },
+                            { label: 'Comm Type', value: t.commission_type || '—', color: '#374151' },
+                            { label: 'Account', value: t.account_name || '—', color: '#1d4ed8' },
+                            { label: 'Bank Card', value: t.bank_card || '—', color: '#374151' },
+                            { label: 'Machine', value: t.swap_name || '—', color: '#374151' },
+                          ].map(({ label, value, color }) => (
+                            <div key={label}>
+                              <div style={{ fontSize: 9, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5 }}>{label}</div>
+                              <div style={{ fontSize: 11, fontWeight: 600, color }}>{value}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Partial payment */}
+                        {pendingAmt > 0 && (
+                          <div style={{ borderTop: '1px solid #fecaca', paddingTop: 8, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600 }}>Settle partial:</span>
+                            <input
+                              type="number"
+                              placeholder={`Max ₹${pendingAmt.toLocaleString('en-IN')}`}
+                              value={partialPayInput[t.id] || ''}
+                              onChange={e => setPartialPayInput(prev => ({ ...prev, [t.id]: e.target.value }))}
+                              style={{ border: '1px solid #fecaca', borderRadius: 4, padding: '2px 8px', fontSize: 11, width: 130, outline: 'none' }}
+                            />
+                            <button type="button"
+                              onClick={async () => {
+                                const amt = parseFloat(partialPayInput[t.id] || '0') || 0
+                                if (amt <= 0) return
+                                const newPaid = Math.min(paid + amt, total)
+                                const fullyPaid = newPaid >= total
+                                await supabase.from('transactions').update({
+                                  paid_amount: newPaid,
+                                  remarks: fullyPaid ? 'PAID' : 'PEND',
+                                  status: fullyPaid ? 'Paid' : 'Pending',
+                                }).eq('id', t.id)
+                                if (fullyPaid) {
+                                  await supabase.from('customer_sheet').update({ paid_amount: newPaid, paid_remaining: 0, paid_date: today }).eq('transaction_id', t.id)
+                                  await supabase.from('commission_sheet').update({ status: 'Paid', paid_date: today }).eq('transaction_id', t.id).eq('status', 'Pending')
+                                  setPendingTxns(prev => prev.filter(x => x.id !== t.id))
+                                } else {
+                                  setPendingTxns(prev => prev.map(x => x.id === t.id ? { ...x, paid_amount: newPaid } : x))
+                                }
+                                setPartialPayInput(prev => ({ ...prev, [t.id]: '' }))
+                              }}
+                              style={{ background: '#f97316', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>
+                              Pay
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )
               })}
