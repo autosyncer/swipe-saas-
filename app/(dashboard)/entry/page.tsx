@@ -828,8 +828,12 @@ function EntryPageInner() {
           swap_amount: totalSwapAcrossEntries,
           card_last4: snapCardLast4,
         }
-        const commodityItemsToUse = snapCommodityItems.filter(i => i.commodity_id && i.qty > 0)
-        invoiceResult = await generateInvoice(txWithCustomer, commodityItemsToUse)
+        // Auto-compute qty from swap total so invoice always matches the transaction amount
+        const autoItems = snapCommodityItems.filter(i => i.commodity_id).map(i => {
+          const qty = i.price > 0 ? Math.ceil(totalSwapAcrossEntries / i.price) : (i.qty || 1)
+          return { ...i, qty, subtotal: qty * i.price }
+        }).filter(i => i.qty > 0)
+        invoiceResult = await generateInvoice(txWithCustomer, autoItems)
         if (invoiceResult) setGeneratedInvoice(invoiceResult)
       }
 
@@ -1641,189 +1645,23 @@ function EntryPageInner() {
           ))}
         </div>
 
-        {/* Commodity Calculator — swap only */}
-        {entryType === 'swap' && <div>
-          <div
-            onClick={() => {
-              setShowCommodities(v => !v)
-              if (commodityItems.length === 0) {
-                setCommodityItems([{ commodity_id: '', name: '', unit: 'pcs', qty: 1, price: 0, subtotal: 0 }])
-              }
-            }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '8px',
-              cursor: 'pointer', padding: '8px 0',
-              color: '#6366f1', fontSize: '13px', fontWeight: '500',
-              borderTop: '1px solid #e5e7eb', marginTop: '4px',
-            }}
-          >
-            <Package size={16} />
-            {showCommodities ? '− Remove Commodity Items' : '+ Add Commodity Items'}
+        {/* Commodity + Invoice — fully automated, no UI shown */}
+        {generatedInvoice && (
+          <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '8px', padding: '12px' }}>
+            <div style={{ fontWeight: 'bold', color: '#166534', marginBottom: '4px', fontSize: '13px' }}>✅ Invoice Generated — {generatedInvoice.invoice_number}</div>
+            <div style={{ fontSize: '12px', color: '#374151' }}>Customer: {generatedInvoice.customer_name} · Total: ₹{Number(generatedInvoice.total_amount).toLocaleString('en-IN')}</div>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+              <button onClick={() => router.push('/invoices')}
+                style={{ background: '#3ECF8E', color: 'white', border: 'none', borderRadius: '4px', padding: '5px 12px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}>
+                View Invoice →
+              </button>
+              <button onClick={() => setGeneratedInvoice(null)}
+                style={{ background: 'none', color: '#9ca3af', border: '1px solid #d1d5db', borderRadius: '4px', padding: '5px 12px', cursor: 'pointer', fontSize: '12px' }}>
+                Dismiss
+              </button>
+            </div>
           </div>
-
-          {showCommodities && (
-            <div style={{ background: '#f5f3ff', border: '1px solid #c4b5fd', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
-              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#4c1d95', marginBottom: '8px' }}>
-                📦 Commodity Calculator
-              </div>
-              <table style={{ width: '100%', fontSize: '12px', marginBottom: '8px' }}>
-                <thead>
-                  <tr style={{ color: '#6b7280' }}>
-                    <th style={{ textAlign: 'left', paddingBottom: '4px', fontWeight: 500 }}>Item</th>
-                    <th style={{ textAlign: 'right', paddingBottom: '4px', fontWeight: 500, width: '50px' }}>Qty</th>
-                    <th style={{ textAlign: 'right', paddingBottom: '4px', fontWeight: 500, width: '70px' }}>Price</th>
-                    <th style={{ textAlign: 'right', paddingBottom: '4px', fontWeight: 500, width: '70px' }}>Total</th>
-                    <th style={{ width: '20px' }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {commodityItems.map((item, i) => (
-                    <tr key={i}>
-                      <td style={{ paddingRight: '4px', paddingBottom: '4px' }}>
-                        <select
-                          value={item.commodity_id}
-                          onChange={e => {
-                            const c = availableCommodities.find(x => x.id === e.target.value)
-                            const totalSwap = accountEntries.reduce((s, ae) => s + (parseFloat(ae.swapAmount) || 0), 0)
-                            const price = c?.current_price ?? 0
-                            const autoQty = price > 0 ? Math.ceil(totalSwap / price) : 1
-                            setCommodityItems(prev => {
-                              const next = [...prev]
-                              next[i] = { ...next[i], commodity_id: e.target.value, name: c?.name ?? '', unit: c?.unit ?? 'pcs', price, qty: autoQty, subtotal: price * autoQty }
-                              return next
-                            })
-                          }}
-                          style={{ width: '100%', border: '1px solid #ddd6fe', borderRadius: '4px', padding: '4px 6px', fontSize: '12px', background: 'white' }}
-                        >
-                          <option value="">Select...</option>
-                          {availableCommodities.map(c => <option key={c.id} value={c.id}>{c.name} ({c.unit})</option>)}
-                        </select>
-                      </td>
-                      <td style={{ paddingRight: '4px', paddingBottom: '4px' }}>
-                        <input
-                          type="number"
-                          value={item.qty}
-                          min={1}
-                          onChange={e => {
-                            const qty = parseFloat(e.target.value) || 0
-                            setCommodityItems(prev => {
-                              const next = [...prev]
-                              next[i] = { ...next[i], qty, subtotal: qty * next[i].price }
-                              return next
-                            })
-                          }}
-                          style={{ width: '100%', border: '1px solid #ddd6fe', borderRadius: '4px', padding: '4px 6px', fontSize: '12px', textAlign: 'right' }}
-                        />
-                      </td>
-                      <td style={{ paddingRight: '4px', paddingBottom: '4px' }}>
-                        <input
-                          type="number"
-                          value={item.price}
-                          min={0}
-                          onChange={e => {
-                            const price = parseFloat(e.target.value) || 0
-                            setCommodityItems(prev => {
-                              const next = [...prev]
-                              next[i] = { ...next[i], price, subtotal: price * next[i].qty }
-                              return next
-                            })
-                          }}
-                          style={{ width: '100%', border: '1px solid #ddd6fe', borderRadius: '4px', padding: '4px 6px', fontSize: '12px', textAlign: 'right' }}
-                        />
-                      </td>
-                      <td style={{ textAlign: 'right', paddingBottom: '4px', fontWeight: 600, color: '#4c1d95', paddingRight: '4px' }}>
-                        ₹{item.subtotal.toLocaleString('en-IN')}
-                      </td>
-                      <td style={{ paddingBottom: '4px' }}>
-                        {commodityItems.length > 1 && (
-                          <button onClick={() => setCommodityItems(prev => prev.filter((_, j) => j !== i))} style={{ color: '#ef4444', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}>
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <button
-                  type="button"
-                  onClick={() => setCommodityItems(prev => [...prev, { commodity_id: '', name: '', unit: 'pcs', qty: 1, price: 0, subtotal: 0 }])}
-                  style={{ fontSize: '12px', color: '#6366f1', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
-                >
-                  <Plus size={12} /> Add Row
-                </button>
-                <div style={{ textAlign: 'right' }}>
-                  {(() => {
-                    const subtotal = commodityItems.reduce((s, r) => s + r.subtotal, 0)
-                    const totalSwap = accountEntries.reduce((s, ae) => s + (parseFloat(ae.swapAmount) || 0), 0)
-                    const discount = subtotal > 0 ? subtotal - totalSwap : 0
-                    return (
-                      <>
-                        <div style={{ fontSize: '12px', color: '#6b7280' }}>
-                          Subtotal: ₹{subtotal.toLocaleString('en-IN')}
-                        </div>
-                        {discount > 0 && (
-                          <div style={{ fontSize: '12px', color: '#dc2626' }}>
-                            Discount: −₹{discount.toLocaleString('en-IN')}
-                          </div>
-                        )}
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: '#4c1d95' }}>
-                          Invoice Total: ₹{totalSwap > 0 ? totalSwap.toLocaleString('en-IN') : subtotal.toLocaleString('en-IN')}
-                        </div>
-                      </>
-                    )
-                  })()}
-                </div>
-              </div>
-              <p style={{ fontSize: '11px', color: '#7c3aed', marginTop: '4px' }}>
-                Invoice will be auto-generated on Submit if items are filled.
-              </p>
-            </div>
-          )}
-
-          {/* Generated invoice success card */}
-          {generatedInvoice && (
-            <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: '8px', padding: '12px', marginTop: '8px' }}>
-              <div style={{ fontWeight: 'bold', color: '#166534', marginBottom: '6px', fontSize: '13px' }}>
-                ✅ Invoice Generated!
-              </div>
-              <div style={{ fontSize: '13px', color: '#374151', marginBottom: '2px' }}>
-                Invoice No: <strong>{generatedInvoice.invoice_number}</strong>
-              </div>
-              <div style={{ fontSize: '13px', color: '#374151', marginBottom: '2px' }}>
-                Customer: {generatedInvoice.customer_name}
-              </div>
-              {generatedInvoice.items.map((item, i) => (
-                <div key={i} style={{ fontSize: '12px', color: '#6b7280' }}>
-                  {(item as Record<string,unknown>).name as string}: {item.qty} {item.unit} x {Number((item as Record<string,unknown>).price).toLocaleString('en-IN')} = {Number(item.subtotal).toLocaleString('en-IN')}
-                </div>
-              ))}
-              {Number((generatedInvoice as Record<string,unknown>).subtotal) > Number(generatedInvoice.total_amount) && (
-                <div style={{ fontSize: '12px', color: '#dc2626' }}>
-                  Discount: -{(Number((generatedInvoice as Record<string,unknown>).subtotal) - Number(generatedInvoice.total_amount)).toLocaleString('en-IN')}
-                </div>
-              )}
-              <div style={{ fontSize: '13px', fontWeight: 600, color: '#166534', marginTop: '4px' }}>
-                Invoice Total: ₹{Number(generatedInvoice.total_amount).toLocaleString('en-IN')}
-              </div>
-              <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                <button
-                  onClick={() => router.push('/invoices')}
-                  style={{ background: '#3ECF8E', color: 'white', border: 'none', borderRadius: '4px', padding: '5px 12px', cursor: 'pointer', fontSize: '12px', fontWeight: 600 }}
-                >
-                  View Invoice →
-                </button>
-                <button
-                  onClick={() => setGeneratedInvoice(null)}
-                  style={{ background: 'none', color: '#9ca3af', border: '1px solid #d1d5db', borderRadius: '4px', padding: '5px 12px', cursor: 'pointer', fontSize: '12px' }}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          )}
-        </div>}
+        )}
 
         {/* 13. Reminder */}
         <div>
