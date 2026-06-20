@@ -1489,8 +1489,8 @@ function EntryPageInner() {
           ))}
         </div>
 
-        {/* Commodity Calculator */}
-        <div>
+        {/* Commodity Calculator — swap only */}
+        {entryType === 'swap' && <div>
           <div
             onClick={() => {
               setShowCommodities(v => !v)
@@ -1671,7 +1671,7 @@ function EntryPageInner() {
               </div>
             </div>
           )}
-        </div>
+        </div>}
 
         {/* 13. Reminder */}
         <div>
