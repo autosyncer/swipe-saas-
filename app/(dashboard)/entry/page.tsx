@@ -156,9 +156,7 @@ function EntryPageInner() {
 
   // Commodity calculator + invoice
   const router = useRouter()
-  const [showCommodities, setShowCommodities] = useState(true)
-  const [availableCommodities, setAvailableCommodities] = useState<{ id: string; name: string; unit: string; current_price: number }[]>([])
-  const [commodityItems, setCommodityItems] = useState<{ commodity_id: string; name: string; unit: string; qty: number; price: number; subtotal: number }[]>([])
+
   const [generatedInvoice, setGeneratedInvoice] = useState<{ invoice_number: string; customer_name: string; total_amount: number; items: { name: string; unit: string; qty: number; subtotal: number }[] } | null>(null)
   const [generatingInvoice, setGeneratingInvoice] = useState(false)
 
@@ -238,20 +236,6 @@ function EntryPageInner() {
     const { data } = await supabase.from('payment_accounts').select('id, name, type, detail').eq('status', 'Active').order('name')
     setPaymentAccounts((data as typeof paymentAccounts) || [])
   }
-
-  // ── Load active commodities and auto-select first one ──
-  useEffect(() => {
-    supabase.from('commodities').select('id, name, unit, current_price').eq('is_active', true).order('name').then(({ data }) => {
-      const list = data ?? []
-      setAvailableCommodities(list)
-      if (list.length > 0) {
-        const first = list[0]
-        const price = Number(first.current_price || 0)
-        setCommodityItems([{ commodity_id: first.id, name: first.name, unit: first.unit || 'pcs', qty: 1, price, subtotal: price }])
-      }
-    })
-
-  }, [])
 
   // ── Prefill customer from URL params (coming from Reminders) ──
   useEffect(() => {
@@ -457,12 +441,7 @@ function EntryPageInner() {
     setReminderTime('09:00')
     setReminderType('payment')
     setReminderNotes('')
-    setShowCommodities(true)
-    // Re-seed with first commodity after reset
-    const first = availableCommodities[0]
-    setCommodityItems(first ? [{ commodity_id: first.id, name: first.name, unit: first.unit || 'pcs', qty: 1, price: Number(first.current_price || 0), subtotal: Number(first.current_price || 0) }] : [])
     setGeneratedInvoice(null)
-    // Keep store/bank selections across entries (don't reset)
     setGeneratingInvoice(false)
   }
 
@@ -703,8 +682,6 @@ function EntryPageInner() {
     const snapReminderTime = reminderTime
     const snapReminderType = reminderType
     const snapReminderNotes = reminderNotes
-    const snapShowCommodities = showCommodities
-    const snapCommodityItems = [...commodityItems]
     const snapCardLast4 = selectedCardLast4
     const savedSrNos: number[] = []
     let lastTransaction: Record<string, unknown> | null = null
@@ -810,13 +787,7 @@ function EntryPageInner() {
           swap_amount: totalSwapAcrossEntries,
           card_last4: snapCardLast4,
         }
-        // Use manually entered commodity items (qty + price set by user)
-        const autoItems = snapCommodityItems.filter(i => i.commodity_id && i.name).map(i => ({
-          ...i,
-          qty: i.qty > 0 ? i.qty : 1,
-          subtotal: (i.qty > 0 ? i.qty : 1) * i.price,
-        })).filter(i => i.qty > 0)
-        invoiceResult = await generateInvoice(txWithCustomer, autoItems)
+        invoiceResult = await generateInvoice(txWithCustomer, [])
         if (invoiceResult) setGeneratedInvoice(invoiceResult)
       }
 
@@ -1628,59 +1599,6 @@ function EntryPageInner() {
           ))}
         </div>
 
-        {/* Commodity selection — manual */}
-        {availableCommodities.length > 0 && (
-          <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '10px', marginTop: '4px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>Commodity (for Invoice)</div>
-            {commodityItems.map((item, idx) => (
-              <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
-                <select
-                  value={item.commodity_id}
-                  onChange={e => {
-                    const c = availableCommodities.find(c => c.id === e.target.value)
-                    setCommodityItems(prev => prev.map((it, i) => i === idx ? { ...it, commodity_id: e.target.value, name: c?.name || '', unit: c?.unit || 'pcs', price: Number(c?.current_price || 0), subtotal: Number(c?.current_price || 0) * it.qty } : it))
-                  }}
-                  style={{ flex: 2, padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', fontSize: '12px', background: 'white', color: '#111', outline: 'none' }}
-                >
-                  <option value="">Select commodity...</option>
-                  {availableCommodities.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-                <input
-                  type="number"
-                  min={1}
-                  value={item.qty}
-                  onChange={e => {
-                    const qty = parseFloat(e.target.value) || 1
-                    setCommodityItems(prev => prev.map((it, i) => i === idx ? { ...it, qty, subtotal: qty * it.price } : it))
-                  }}
-                  placeholder="Qty"
-                  style={{ width: '60px', padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', fontSize: '12px', textAlign: 'right', outline: 'none' }}
-                />
-                <input
-                  type="number"
-                  min={0}
-                  value={item.price}
-                  onChange={e => {
-                    const price = parseFloat(e.target.value) || 0
-                    setCommodityItems(prev => prev.map((it, i) => i === idx ? { ...it, price, subtotal: it.qty * price } : it))
-                  }}
-                  placeholder="Price"
-                  style={{ width: '80px', padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', fontSize: '12px', textAlign: 'right', outline: 'none' }}
-                />
-                <span style={{ fontSize: '11px', color: '#6b7280', minWidth: '60px', textAlign: 'right' }}>₹{(item.subtotal).toLocaleString('en-IN')}</span>
-                {commodityItems.length > 1 && (
-                  <button onClick={() => setCommodityItems(prev => prev.filter((_, i) => i !== idx))}
-                    style={{ color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}>✕</button>
-                )}
-              </div>
-            ))}
-            <button
-              onClick={() => setCommodityItems(prev => [...prev, { commodity_id: '', name: '', unit: 'pcs', qty: 1, price: 0, subtotal: 0 }])}
-              style={{ fontSize: '11px', color: '#3ECF8E', background: 'none', border: 'none', cursor: 'pointer', padding: '0' }}>
-              + Add item
-            </button>
-          </div>
-        )}
 
         {/* Commodity + Invoice — fully automated, no UI shown */}
         {generatedInvoice && (
