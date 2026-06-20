@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback } from 'react'
-import { Search, Plus, X, Edit, RefreshCw, ChevronDown, ChevronRight, CreditCard, Building2, Trash2, FileText, Upload, Eye, StickyNote } from 'lucide-react'
+import { Search, Plus, X, Edit, RefreshCw, ChevronDown, ChevronRight, CreditCard, Building2, Trash2, FileText, Upload, Eye, StickyNote, Receipt, Printer } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { supabaseAdmin } from '@/lib/supabase/admin-client'
 import { Customer, Transaction, Card, CustomerBankAccount } from '@/types/database'
@@ -873,7 +873,7 @@ function ExpandedRow({
             <div className="text-xs font-semibold text-[#6b7280] uppercase mb-2">Recent Transactions</div>
             <table className="w-full text-xs">
               <thead><tr className="border-b border-[#e5e7eb]">
-                {['SR', 'Date', 'Total', 'Paid', 'Remarks'].map(h => (
+                {['SR', 'Date', 'Total', 'Paid', 'Remarks', ''].map(h => (
                   <th key={h} className="px-3 py-1.5 text-left font-semibold text-[#6b7280]">{h}</th>
                 ))}
               </tr></thead>
@@ -885,6 +885,31 @@ function ExpandedRow({
                     <td className="px-3 py-1.5">₹{t.total_amount.toLocaleString('en-IN')}</td>
                     <td className="px-3 py-1.5">₹{t.paid_amount.toLocaleString('en-IN')}</td>
                     <td className="px-3 py-1.5"><StatusBadge status={t.remarks} /></td>
+                    <td className="px-3 py-1.5">
+                      <div className="flex items-center gap-1">
+                        <a
+                          href={`/invoices?sr=${t.sr_no}`}
+                          target="_blank"
+                          title="View Invoice"
+                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border border-[#c4b5fd] text-[#7c3aed] bg-[#f5f3ff] hover:bg-[#ede9fe]"
+                        >
+                          <Receipt size={10} /> Invoice
+                        </a>
+                        <button
+                          onClick={() => {
+                            const win = window.open('', '_blank')
+                            if (!win) return
+                            win.document.write(`<html><head><title>Receipt SR#${t.sr_no}</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#111;max-width:400px;margin:auto}.title{font-size:20px;font-weight:bold;text-align:center;margin-bottom:16px}.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eee}.label{color:#6b7280;font-size:13px}.value{font-weight:600;font-size:13px}.total{font-size:16px;font-weight:bold;margin-top:12px;text-align:right}.footer{text-align:center;margin-top:24px;font-size:11px;color:#9ca3af}</style></head><body><div class="title">RECEIPT</div><div class="row"><span class="label">SR No.</span><span class="value">#${t.sr_no}</span></div><div class="row"><span class="label">Date</span><span class="value">${t.date}</span></div><div class="row"><span class="label">Customer</span><span class="value">${t.customer_name || ''}</span></div><div class="row"><span class="label">Total Amount</span><span class="value">₹${Number(t.total_amount).toLocaleString('en-IN')}</span></div><div class="row"><span class="label">Paid Amount</span><span class="value">₹${Number(t.paid_amount).toLocaleString('en-IN')}</span></div><div class="row"><span class="label">Status</span><span class="value">${t.remarks || ''}</span></div><div class="footer">Thank you for your business</div></body></html>`)
+                            win.document.close()
+                            win.print()
+                          }}
+                          title="Print Receipt"
+                          className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border border-[#bbf7d0] text-[#15803d] bg-[#f0fdf4] hover:bg-[#dcfce7]"
+                        >
+                          <Printer size={10} /> Receipt
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
