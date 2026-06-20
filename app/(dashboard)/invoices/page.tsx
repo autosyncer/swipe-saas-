@@ -108,6 +108,12 @@ export default function InvoicesPage() {
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([])
   const [selBank, setSelBank] = useState('')
 
+  // Inline store+bank picker on invoice row
+  const [pickerInvoiceId, setPickerInvoiceId] = useState<string | null>(null)
+  const [pickerStore, setPickerStore] = useState('')
+  const [pickerBank, setPickerBank] = useState('')
+  const [savingPicker, setSavingPicker] = useState(false)
+
   const [detailInvoice, setDetailInvoice] = useState<Invoice | null>(null)
   const printRef = useRef<HTMLDivElement>(null)
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
@@ -193,6 +199,24 @@ export default function InvoicesPage() {
       fetchInvoices()
     }
     setCreating(false)
+  }
+
+  function openPicker(inv: Invoice) {
+    setPickerInvoiceId(inv.id)
+    setPickerStore(inv.store_id ?? '')
+    setPickerBank((inv.bank_account_id as string) ?? '')
+  }
+
+  async function savePickerDetails(invId: string) {
+    setSavingPicker(true)
+    await supabase.from('invoices').update({
+      store_id: pickerStore || null,
+      bank_account_id: pickerBank || null,
+    }).eq('id', invId)
+    await fetchInvoices()
+    setPickerInvoiceId(null)
+    setSavingPicker(false)
+    showToast('Invoice updated')
   }
 
   async function updateStatus(inv: Invoice, status: Invoice['status']) {
@@ -502,30 +526,91 @@ export default function InvoicesPage() {
               <tr><td colSpan={6} className="text-center py-12 text-sm text-[#9ca3af]">Loading...</td></tr>
             ) : filtered.length === 0 ? (
               <tr><td colSpan={6} className="text-center py-12 text-sm text-[#9ca3af]">No invoices found</td></tr>
-            ) : filtered.map(inv => (
-              <tr key={inv.id} className="hover:bg-[#f9fafb] transition-colors">
-                <td className="px-4 py-3 font-mono font-semibold text-xs" style={{ color: '#3ECF8E' }}>{inv.invoice_number}</td>
-                <td className="px-4 py-3 font-medium text-[#111]">{inv.customer_name}</td>
-                <td className="px-4 py-3 text-[#6b7280]">{new Date(inv.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-                <td className="px-4 py-3 text-right font-semibold text-[#111]">₹{Number(inv.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
-                <td className="px-4 py-3 text-center">
-                  <select value={inv.status} onChange={e => updateStatus(inv, e.target.value as Invoice['status'])}
-                    className="px-2.5 py-0.5 rounded-full text-xs font-semibold border outline-none cursor-pointer"
-                    style={{ background: STATUS_STYLE[inv.status].bg, color: STATUS_STYLE[inv.status].color, borderColor: STATUS_STYLE[inv.status].border }}>
-                    <option value="draft">Draft</option>
-                    <option value="sent">Sent</option>
-                    <option value="paid">Paid</option>
-                    <option value="cancelled">Cancelled</option>
-                  </select>
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <button onClick={() => setDetailInvoice(inv)}
-                    className="p-1.5 rounded-lg hover:bg-gray-100 text-[#9ca3af] hover:text-[#374151]" title="View">
-                    <Eye size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))}
+            ) : filtered.map(inv => {
+              const isPicking = pickerInvoiceId === inv.id
+              const invStore = stores.find(s => s.id === inv.store_id)
+              const invBank = bankAccounts.find(b => b.id === inv.bank_account_id)
+              return (
+                <>
+                  <tr key={inv.id} className="hover:bg-[#f9fafb] transition-colors">
+                    <td className="px-4 py-3 font-mono font-semibold text-xs" style={{ color: '#3ECF8E' }}>{inv.invoice_number}</td>
+                    <td className="px-4 py-3 font-medium text-[#111]">{inv.customer_name}</td>
+                    <td className="px-4 py-3 text-[#6b7280]">{new Date(inv.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-[#111]">₹{Number(inv.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                    <td className="px-4 py-3 text-center">
+                      <select value={inv.status} onChange={e => updateStatus(inv, e.target.value as Invoice['status'])}
+                        className="px-2.5 py-0.5 rounded-full text-xs font-semibold border outline-none cursor-pointer"
+                        style={{ background: STATUS_STYLE[inv.status].bg, color: STATUS_STYLE[inv.status].color, borderColor: STATUS_STYLE[inv.status].border }}>
+                        <option value="draft">Draft</option>
+                        <option value="sent">Sent</option>
+                        <option value="paid">Paid</option>
+                        <option value="cancelled">Cancelled</option>
+                      </select>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => isPicking ? setPickerInvoiceId(null) : openPicker(inv)}
+                          className="p-1.5 rounded-lg hover:bg-gray-100 text-[#9ca3af] hover:text-[#374151]"
+                          title="Set Store & Bank"
+                        >
+                          <Settings size={14} />
+                        </button>
+                        <button onClick={() => setDetailInvoice(inv)}
+                          className="p-1.5 rounded-lg hover:bg-gray-100 text-[#9ca3af] hover:text-[#374151]" title="View">
+                          <Eye size={14} />
+                        </button>
+                      </div>
+                      {/* Store/Bank badge */}
+                      {!isPicking && (invStore || invBank) && (
+                        <div className="flex gap-1 justify-end mt-1 flex-wrap">
+                          {invStore && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">{invStore.name}</span>}
+                          {invBank && <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">{invBank.account_name}</span>}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                  {isPicking && (
+                    <tr key={`${inv.id}-picker`} style={{ background: '#f5f3ff' }}>
+                      <td colSpan={6} className="px-4 py-3">
+                        <div className="flex items-end gap-4">
+                          <div style={{ flex: 1 }}>
+                            <label className={lbl}>Select Store</label>
+                            <select className={inp} value={pickerStore} onChange={e => setPickerStore(e.target.value)}>
+                              <option value="">— No store —</option>
+                              {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                            {pickerStore && stores.find(s => s.id === pickerStore) && (
+                              <div className="mt-1 text-xs text-[#6b7280] whitespace-pre-line">{stores.find(s => s.id === pickerStore)!.address}</div>
+                            )}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <label className={lbl}>Select Bank Account</label>
+                            <select className={inp} value={pickerBank} onChange={e => setPickerBank(e.target.value)}>
+                              <option value="">— No bank —</option>
+                              {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.account_name}</option>)}
+                            </select>
+                            {pickerBank && bankAccounts.find(b => b.id === pickerBank) && (() => {
+                              const b = bankAccounts.find(b => b.id === pickerBank)!
+                              return <div className="mt-1 text-xs text-[#6b7280]">{b.bank_name} · {b.account_number} · {b.ifsc_code}</div>
+                            })()}
+                          </div>
+                          <div className="flex gap-2 pb-0.5">
+                            <button onClick={() => setPickerInvoiceId(null)}
+                              className="px-3 py-2 rounded-lg text-sm border border-[#e5e7eb] text-[#374151] hover:bg-white">Cancel</button>
+                            <button onClick={() => savePickerDetails(inv.id)} disabled={savingPicker}
+                              className="px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50"
+                              style={{ background: '#3ECF8E' }}>
+                              {savingPicker ? 'Saving...' : 'Save'}
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </>
+              )
+            })}
           </tbody>
         </table>
       </div>
