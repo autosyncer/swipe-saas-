@@ -576,9 +576,7 @@ export default function Header() {
       >
         {/* Left: breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-[#6b7280]">
-          <span>chamundaswipe&apos;s Org</span>
-          <span>/</span>
-          <span>chamundaswipe&apos;s Project</span>
+          <span>Shree Karni Trader</span>
           <span>/</span>
           <span className="text-[#1a1a1a] font-medium">main</span>
           <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold" style={{ background: '#d1fae5', color: '#065f46' }}>
