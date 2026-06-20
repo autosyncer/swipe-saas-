@@ -702,6 +702,8 @@ function EntryPageInner() {
     const snapShowCommodities = showCommodities
     const snapCommodityItems = [...commodityItems]
     const snapCardLast4 = selectedCardLast4
+    const snapInvoiceStore = selInvoiceStore
+    const snapInvoiceBank = selInvoiceBank
 
     const savedSrNos: number[] = []
     let lastTransaction: Record<string, unknown> | null = null
@@ -813,7 +815,7 @@ function EntryPageInner() {
           qty: i.qty > 0 ? i.qty : 1,
           subtotal: (i.qty > 0 ? i.qty : 1) * i.price,
         })).filter(i => i.qty > 0)
-        invoiceResult = await generateInvoice(txWithCustomer, autoItems, selInvoiceStore, selInvoiceBank)
+        invoiceResult = await generateInvoice(txWithCustomer, autoItems, snapInvoiceStore, snapInvoiceBank)
         if (invoiceResult) setGeneratedInvoice(invoiceResult)
       }
 
