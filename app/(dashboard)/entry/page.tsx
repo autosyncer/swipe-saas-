@@ -1480,16 +1480,7 @@ function EntryPageInner() {
                 </div>
               </div>
 
-              {/* Remarks */}
-              <div>
-                <label className={labelCls}>Remarks</label>
-                <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
-                  value={entry.remarks}
-                  onChange={e => updateEntry(entry.id, { remarks: e.target.value })}
-                >
-                  {REMARKS_OPTS.map(r => <option key={r}>{r}</option>)}
-                </select>
-              </div>
+              {/* Remarks — auto-set by payment mode logic, hidden from UI */}
             </div>
           ))}
         </div>
