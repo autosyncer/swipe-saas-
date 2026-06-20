@@ -807,12 +807,13 @@ function EntryPageInner() {
           swap_amount: totalSwapAcrossEntries,
           card_last4: snapCardLast4,
         }
-        // Auto-compute qty from swap total so invoice always matches the transaction amount
-        const autoItems = snapCommodityItems.filter(i => i.commodity_id).map(i => {
-          const qty = i.price > 0 ? Math.ceil(totalSwapAcrossEntries / i.price) : (i.qty || 1)
-          return { ...i, qty, subtotal: qty * i.price }
-        }).filter(i => i.qty > 0)
-        invoiceResult = await generateInvoice(txWithCustomer, autoItems)
+        // Use manually entered commodity items (qty + price set by user)
+        const autoItems = snapCommodityItems.filter(i => i.commodity_id && i.name).map(i => ({
+          ...i,
+          qty: i.qty > 0 ? i.qty : 1,
+          subtotal: (i.qty > 0 ? i.qty : 1) * i.price,
+        })).filter(i => i.qty > 0)
+        invoiceResult = await generateInvoice(txWithCustomer, autoItems, selInvoiceStore, selInvoiceBank)
         if (invoiceResult) setGeneratedInvoice(invoiceResult)
       }
 
@@ -1623,6 +1624,60 @@ function EntryPageInner() {
             </div>
           ))}
         </div>
+
+        {/* Commodity selection — manual */}
+        {availableCommodities.length > 0 && (
+          <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '10px', marginTop: '4px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 600, color: '#374151', marginBottom: '6px' }}>Commodity (for Invoice)</div>
+            {commodityItems.map((item, idx) => (
+              <div key={idx} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+                <select
+                  value={item.commodity_id}
+                  onChange={e => {
+                    const c = availableCommodities.find(c => c.id === e.target.value)
+                    setCommodityItems(prev => prev.map((it, i) => i === idx ? { ...it, commodity_id: e.target.value, name: c?.name || '', unit: c?.unit || 'pcs', price: Number(c?.current_price || 0), subtotal: Number(c?.current_price || 0) * it.qty } : it))
+                  }}
+                  style={{ flex: 2, padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', fontSize: '12px', background: 'white', color: '#111', outline: 'none' }}
+                >
+                  <option value="">Select commodity...</option>
+                  {availableCommodities.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <input
+                  type="number"
+                  min={1}
+                  value={item.qty}
+                  onChange={e => {
+                    const qty = parseFloat(e.target.value) || 1
+                    setCommodityItems(prev => prev.map((it, i) => i === idx ? { ...it, qty, subtotal: qty * it.price } : it))
+                  }}
+                  placeholder="Qty"
+                  style={{ width: '60px', padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', fontSize: '12px', textAlign: 'right', outline: 'none' }}
+                />
+                <input
+                  type="number"
+                  min={0}
+                  value={item.price}
+                  onChange={e => {
+                    const price = parseFloat(e.target.value) || 0
+                    setCommodityItems(prev => prev.map((it, i) => i === idx ? { ...it, price, subtotal: it.qty * price } : it))
+                  }}
+                  placeholder="Price"
+                  style={{ width: '80px', padding: '6px 8px', border: '1px solid #e5e7eb', borderRadius: '6px', fontSize: '12px', textAlign: 'right', outline: 'none' }}
+                />
+                <span style={{ fontSize: '11px', color: '#6b7280', minWidth: '60px', textAlign: 'right' }}>₹{(item.subtotal).toLocaleString('en-IN')}</span>
+                {commodityItems.length > 1 && (
+                  <button onClick={() => setCommodityItems(prev => prev.filter((_, i) => i !== idx))}
+                    style={{ color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}>✕</button>
+                )}
+              </div>
+            ))}
+            <button
+              onClick={() => setCommodityItems(prev => [...prev, { commodity_id: '', name: '', unit: 'pcs', qty: 1, price: 0, subtotal: 0 }])}
+              style={{ fontSize: '11px', color: '#3ECF8E', background: 'none', border: 'none', cursor: 'pointer', padding: '0' }}>
+              + Add item
+            </button>
+          </div>
+        )}
 
         {/* Invoice — store + bank selection */}
         {/* Commodity + Invoice — fully automated, no UI shown */}
