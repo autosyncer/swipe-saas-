@@ -54,9 +54,8 @@ interface BankAccount {
   id: string
   account_name: string
   bank_name: string
-  account_number: string
-  ifsc_code: string
-  branch: string
+  account_number_masked: string
+  ifsc: string
 }
 
 interface Commodity { id: string; name: string; unit: string; current_price: number }
@@ -140,7 +139,7 @@ export default function InvoicesPage() {
     Promise.all([
       supabase.from('commodities').select('id,name,unit,current_price').eq('is_active', true).order('name'),
       supabase.from('customers').select('id,name').order('name'),
-      supabase.from('bank_accounts').select('id,account_name,bank_name,account_number,ifsc_code,branch').order('account_name'),
+      supabase.from('bank_accounts').select('id,account_name,bank_name,account_number_masked,ifsc').order('account_name'),
     ]).then(([{ data: comms }, { data: custs }, { data: banks }]) => {
       setCommodities(comms ?? [])
       setCustomers(custs ?? [])
@@ -265,8 +264,8 @@ export default function InvoicesPage() {
       address: store?.address ?? '',
       jurisdiction: store?.jurisdiction ?? '',
       bankName: bank?.bank_name ?? '',
-      accNo: bank?.account_number ?? '',
-      ifsc: bank ? `${bank.branch} & ${bank.ifsc_code}` : '',
+      accNo: bank?.account_number_masked ?? '',
+      ifsc: bank?.ifsc ?? '',
     }
   }
 
@@ -398,8 +397,8 @@ export default function InvoicesPage() {
               {selectedBankObj && (
                 <div className="mt-1.5 px-2 py-1.5 rounded-lg text-xs text-[#374151] border border-[#e5e7eb] bg-[#f9fafb]">
                   <div>{selectedBankObj.bank_name}</div>
-                  <div className="text-[#6b7280]">A/C: {selectedBankObj.account_number}</div>
-                  <div className="text-[#6b7280]">{selectedBankObj.ifsc_code}</div>
+                  <div className="text-[#6b7280]">A/C: {selectedBankObj.account_number_masked}</div>
+                  <div className="text-[#6b7280]">{selectedBankObj.ifsc}</div>
                 </div>
               )}
             </div>
@@ -592,7 +591,7 @@ export default function InvoicesPage() {
                             </select>
                             {pickerBank && bankAccounts.find(b => b.id === pickerBank) && (() => {
                               const b = bankAccounts.find(b => b.id === pickerBank)!
-                              return <div className="mt-1 text-xs text-[#6b7280]">{b.bank_name} · {b.account_number} · {b.ifsc_code}</div>
+                              return <div className="mt-1 text-xs text-[#6b7280]">{b.bank_name} · {b.account_number_masked} · {b.ifsc}</div>
                             })()}
                           </div>
                           <div className="flex gap-2 pb-0.5">

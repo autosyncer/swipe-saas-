@@ -163,7 +163,7 @@ function EntryPageInner() {
   const [generatingInvoice, setGeneratingInvoice] = useState(false)
   // Store + bank for invoice
   const [invoiceStores, setInvoiceStores] = useState<{ id: string; name: string; address: string; jurisdiction: string }[]>([])
-  const [invoiceBanks, setInvoiceBanks] = useState<{ id: string; account_name: string; bank_name: string; account_number: string; ifsc_code: string; branch: string }[]>([])
+  const [invoiceBanks, setInvoiceBanks] = useState<{ id: string; account_name: string; bank_name: string; account_number_masked: string; ifsc: string }[]>([])
   const [selInvoiceStore, setSelInvoiceStore] = useState('')
   const [selInvoiceBank, setSelInvoiceBank] = useState('')
 
@@ -255,7 +255,7 @@ function EntryPageInner() {
       }
     })
     supabase.from('invoice_stores').select('id,name,address,jurisdiction').order('name').then(({ data }) => setInvoiceStores(data ?? []))
-    supabase.from('bank_accounts').select('id,account_name,bank_name,account_number,ifsc_code,branch').order('account_name').then(({ data }) => setInvoiceBanks(data ?? []))
+    supabase.from('bank_accounts').select('id,account_name,bank_name,account_number_masked,ifsc').order('account_name').then(({ data }) => setInvoiceBanks(data ?? []))
   }, [])
 
   // ── Prefill customer from URL params (coming from Reminders) ──
@@ -611,14 +611,14 @@ function EntryPageInner() {
       if (bankAccountId) {
         const { data: bankAcc } = await supabase
           .from('bank_accounts')
-          .select('bank_name, account_number, ifsc_code, branch')
+          .select('bank_name, account_number_masked, ifsc')
           .eq('id', bankAccountId)
           .maybeSingle()
         if (bankAcc) {
           storeBankName = (bankAcc as Record<string, string>).bank_name || ''
-          storeAccNo    = (bankAcc as Record<string, string>).account_number || ''
-          storeIfsc     = (bankAcc as Record<string, string>).ifsc_code || ''
-          storeBranch   = (bankAcc as Record<string, string>).branch || ''
+          storeAccNo    = (bankAcc as Record<string, string>).account_number_masked || ''
+          storeIfsc     = (bankAcc as Record<string, string>).ifsc || ''
+          storeBranch   = ''
         }
       }
 
@@ -662,7 +662,7 @@ function EntryPageInner() {
         status: 'draft',
         store_bank_name: storeBankName,
         store_acc_no:    storeAccNo,
-        store_ifsc:      storeIfsc ? `${storeBranch} & ${storeIfsc}` : storeBranch,
+        store_ifsc:      storeIfsc,
         store_id: storeId || null,
         bank_account_id: bankAccountId || null,
       }
