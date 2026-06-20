@@ -724,8 +724,8 @@ function EntryPageInner() {
         swap_amount: parseFloat(entry.swapAmount) || 0,
         swap_name: entry.machineName,
         difference: entry.difference ? parseFloat(entry.difference) : null,
-        remarks: entry.remarks,
-        status: ({PAID:'Paid',PEND:'Pending',PURU:'Puru',UNPAID:'Unpaid',SE:'Paid',CANCEL:'Cancelled'} as Record<string,string>)[entry.remarks] || 'Pending',
+        remarks: entryType === 'refill' ? 'PAID' : entry.remarks,
+        status: entryType === 'refill' ? 'Paid' : (({PAID:'Paid',PEND:'Pending',PURU:'Puru',UNPAID:'Unpaid',SE:'Paid',CANCEL:'Cancelled'} as Record<string,string>)[entry.remarks] || 'Pending'),
         commission_pct: comm,
         commission_amount: commAmt,
         commission_type: entry.commType,
@@ -1122,8 +1122,8 @@ function EntryPageInner() {
                 )}
               </div>
 
-              {/* Machine Name */}
-              <div>
+              {/* Machine Name — swap only */}
+              {entryType === 'swap' && <div>
                 <label className={labelCls}>Swipe Machine</label>
                 <input className={inputCls} style={{ borderColor: '#e5e7eb' }}
                   value={entry.machineName}
@@ -1299,8 +1299,8 @@ function EntryPageInner() {
                 )
               })()}
 
-              {/* Payment Mode — chip toggle multi-select */}
-              {(() => {
+              {/* Payment Mode — swap only */}
+              {entryType === 'swap' && (() => {
                 const MODES: PaymentModeEntry['mode'][] = ['CASH', 'NEFT', 'RTGS', 'UPI', 'GPAY', 'PHONEPAY']
                 const totalVal = parseFloat(entry.totalAmount) || 0
                 const totalPaid = entry.paymentModes.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0)
@@ -1460,25 +1460,27 @@ function EntryPageInner() {
                 )
               })()}
 
-              {/* Swap + Difference */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className={labelCls}>Swap Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
-                  <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                    value={entry.swapAmount}
-                    onChange={e => updateEntry(entry.id, { swapAmount: e.target.value })}
-                    placeholder="0"
-                  />
+              {/* Swap + Difference — swap only */}
+              {entryType === 'swap' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className={labelCls}>Swap Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
+                    <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                      value={entry.swapAmount}
+                      onChange={e => updateEntry(entry.id, { swapAmount: e.target.value })}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Difference (₹)</label>
+                    <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                      value={entry.difference}
+                      onChange={e => updateEntry(entry.id, { difference: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className={labelCls}>Difference (₹)</label>
-                  <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                    value={entry.difference}
-                    onChange={e => updateEntry(entry.id, { difference: e.target.value })}
-                    placeholder="Optional"
-                  />
-                </div>
-              </div>
+              )}
 
               {/* Remarks — auto-set by payment mode logic, hidden from UI */}
             </div>
