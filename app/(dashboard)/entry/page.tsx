@@ -1002,7 +1002,23 @@ function EntryPageInner() {
             <div className="flex gap-4 mt-1.5 text-xs">
               <div>
                 <span className="text-[#6b7280]">Outstanding</span>
-                <div className="font-semibold text-[#1a1a1a]">₹{fmt(selectedCustomer.outstanding_balance)}</div>
+                {(() => {
+                  const pendingTotal = pendingTxns.reduce((s, t) => s + Number(t.total_amount || 0), 0)
+                  const base = Number(selectedCustomer.outstanding_balance || 0)
+                  const total = base + pendingTotal
+                  return (
+                    <div>
+                      <div className="font-semibold" style={{ color: total > 0 ? '#dc2626' : '#1a1a1a' }}>
+                        ₹{fmt(total)}
+                      </div>
+                      {pendingTotal > 0 && (
+                        <div style={{ fontSize: 9, color: '#dc2626', fontWeight: 600 }}>
+                          incl. ₹{fmt(pendingTotal)} unsettled
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
               <div>
                 <span className="text-[#6b7280]">Commission</span>
