@@ -157,6 +157,7 @@ function EntryPageInner() {
   // Commodity calculator + invoice
   const router = useRouter()
 
+  const [activeCommodity, setActiveCommodity] = useState<{ id: string; name: string; unit: string; current_price: number } | null>(null)
   const [generatedInvoice, setGeneratedInvoice] = useState<{ invoice_number: string; customer_name: string; total_amount: number; items: { name: string; unit: string; qty: number; subtotal: number }[] } | null>(null)
   const [generatingInvoice, setGeneratingInvoice] = useState(false)
 
@@ -236,6 +237,13 @@ function EntryPageInner() {
     const { data } = await supabase.from('payment_accounts').select('id, name, type, detail').eq('status', 'Active').order('name')
     setPaymentAccounts((data as typeof paymentAccounts) || [])
   }
+
+  // ── Load first active commodity for auto invoice line item ──
+  useEffect(() => {
+    supabase.from('commodities').select('id,name,unit,current_price').eq('is_active', true).order('name').limit(1).single().then(({ data }) => {
+      if (data) setActiveCommodity(data)
+    })
+  }, [])
 
   // ── Prefill customer from URL params (coming from Reminders) ──
   useEffect(() => {
@@ -803,7 +811,14 @@ function EntryPageInner() {
           swap_amount: totalSwapAcrossEntries,
           card_last4: snapCardLast4,
         }
-        invoiceResult = await generateInvoice(txWithCustomer, [])
+        const autoItems = activeCommodity && totalSwapAcrossEntries > 0
+          ? (() => {
+              const price = Number(activeCommodity.current_price) || 1
+              const qty = price > 0 ? Math.ceil(totalSwapAcrossEntries / price) : 1
+              return [{ commodity_id: activeCommodity.id, name: activeCommodity.name, unit: activeCommodity.unit || 'pcs', qty, price, subtotal: qty * price }]
+            })()
+          : []
+        invoiceResult = await generateInvoice(txWithCustomer, autoItems)
         if (invoiceResult) setGeneratedInvoice(invoiceResult)
       }
 
