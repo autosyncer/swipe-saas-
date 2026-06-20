@@ -142,12 +142,6 @@ function AccountPanel({
   const [machine, setMachine] = useState<SwipeMachineLinked>({ ...EMPTY_MACHINE })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [invoiceStores, setInvoiceStores] = useState<{ id: string; name: string; address: string; jurisdiction: string; gst_no: string }[]>([])
-  const [selStoreId, setSelStoreId] = useState('')
-
-  useEffect(() => {
-    supabase.from('invoice_stores').select('id,name,address,jurisdiction,gst_no').order('name').then(({ data }) => setInvoiceStores(data ?? []))
-  }, [])
 
   // On edit mode, fetch linked machine
   useEffect(() => {
@@ -432,28 +426,6 @@ function AccountPanel({
                   <div className="mt-1 text-[10px]">This machine will be automatically linked to the bank account on the left.</div>
                 </div>
 
-                {/* Store Details */}
-                <div className="mt-4">
-                  <div className="text-[10px] font-bold text-[#9ca3af] uppercase tracking-widest mb-3 pb-1 border-b border-[#f3f4f6]">Store Details</div>
-                  <div>
-                    <Label>Select Store</Label>
-                    <select className={inp()} value={selStoreId} onChange={e => setSelStoreId(e.target.value)}>
-                      <option value="">— No store —</option>
-                      {invoiceStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                    {selStoreId && (() => {
-                      const s = invoiceStores.find(x => x.id === selStoreId)
-                      if (!s) return null
-                      return (
-                        <div className="mt-2 p-2 rounded-lg border border-[#e5e7eb] bg-[#f9fafb] text-xs text-[#374151] space-y-0.5">
-                          {s.address && <div className="whitespace-pre-line">{s.address}</div>}
-                          {s.gst_no && <div className="text-[#6b7280]">GST: {s.gst_no}</div>}
-                          {s.jurisdiction && <div className="text-[#9ca3af]">{s.jurisdiction}</div>}
-                        </div>
-                      )
-                    })()}
-                  </div>
-                </div>
               </div>
             </div>
 
