@@ -125,8 +125,8 @@ function AccountPanel({
         contact_person: initial.contact_person || '',
         contact_phone: initial.contact_phone || '',
         opening_balance: String(initial.opening_balance || 0),
-        mobile_banking_enabled: !!(initial as Record<string,unknown>).mobile_banking_app,
-        mobile_banking_app: ((initial as Record<string,unknown>).mobile_banking_app as MobileBankingApp | '') || '',
+        mobile_banking_enabled: !!((initial as unknown as Record<string,unknown>).mobile_banking_app),
+        mobile_banking_app: (((initial as unknown as Record<string,unknown>).mobile_banking_app) as MobileBankingApp | '') || '',
       }
     }
     return EMPTY_FORM
@@ -289,7 +289,7 @@ function AccountPanel({
                   <div className="flex items-center gap-3 mb-3">
                     <button
                       type="button"
-                      onClick={() => set('mobile_banking_enabled', !form.mobile_banking_enabled)}
+                      onClick={() => setForm(f => ({ ...f, mobile_banking_enabled: !f.mobile_banking_enabled, mobile_banking_app: '' }))}
                       className="flex items-center gap-2 text-sm font-medium"
                       style={{ color: form.mobile_banking_enabled ? '#3ECF8E' : '#9ca3af' }}
                     >
