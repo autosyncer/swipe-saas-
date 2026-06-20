@@ -226,12 +226,15 @@ interface DashMetrics {
   transactionsToday: number
   commissionCollectedToday: number
   amountToSettle: number
+  cashInBank: number
+  cashInHand: number
+  amountInCards: number
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const [metrics, setMetrics] = useState<DashMetrics>({ totalSwiped: 0, commissionToday: 0, pendingCollections: 0, transactionsToday: 0, commissionCollectedToday: 0, amountToSettle: 0 })
+  const [metrics, setMetrics] = useState<DashMetrics>({ totalSwiped: 0, commissionToday: 0, pendingCollections: 0, transactionsToday: 0, commissionCollectedToday: 0, amountToSettle: 0, cashInBank: 0, cashInHand: 0, amountInCards: 0 })
   const [recentTxns, setRecentTxns] = useState<Transaction[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -246,10 +249,13 @@ export default function DashboardPage() {
     setLoading(true)
     const today = new Date().toISOString().split('T')[0]
 
-    const [{ data: todayTxns }, { data: recent }, { data: pendingTxns }] = await Promise.all([
+    const [{ data: todayTxns }, { data: recent }, { data: pendingTxns }, { data: bankAccs }, { data: chamundaRows }, { data: refillTxns }] = await Promise.all([
       supabase.from('transactions').select('total_amount, paid_amount, swap_amount, remarks, commission_pct, commission_type, commission_amount').eq('date', today),
       supabase.from('transactions').select('*').order('sr_no', { ascending: false }).limit(10),
       supabase.from('transactions').select('total_amount, paid_amount, remarks').in('remarks', ['PEND', 'UNPAID', 'PURU']),
+      supabase.from('bank_accounts').select('current_balance'),
+      supabase.from('chamunda_sheet').select('closing_balance').eq('row_type', 'total').order('date', { ascending: false }).limit(1),
+      supabase.from('transactions').select('total_amount').eq('entry_type', 'refill'),
     ])
 
     const txns = (todayTxns as (Pick<Transaction, 'total_amount' | 'paid_amount' | 'swap_amount' | 'remarks'> & { commission_pct?: number; commission_type?: string; commission_amount?: number })[]) || []
@@ -257,13 +263,14 @@ export default function DashboardPage() {
     const commissionToday = txns.reduce((s, t) => s + ((t.swap_amount || 0) - (t.paid_amount || 0)), 0)
     const pendingCollections = txns.filter(t => t.remarks !== 'Paid').reduce((s, t) => s + (t.swap_amount || 0), 0)
     const transactionsToday = txns.length
-    // Commission collected today = sum of commission_amount for today's transactions
     const commissionCollectedToday = txns.reduce((s, t) => s + (t.commission_amount || 0), 0)
-    // Amount to settle = total unpaid amount across all pending transactions
     const pending = (pendingTxns as { total_amount: number; paid_amount: number; remarks: string }[]) || []
     const amountToSettle = pending.reduce((s, t) => s + ((t.total_amount || 0) - (t.paid_amount || 0)), 0)
+    const cashInBank = (bankAccs as { current_balance: number }[] || []).reduce((s, b) => s + (Number(b.current_balance) || 0), 0)
+    const cashInHand = Number((chamundaRows as { closing_balance: number }[] || [])[0]?.closing_balance || 0)
+    const amountInCards = (refillTxns as { total_amount: number }[] || []).reduce((s, t) => s + (Number(t.total_amount) || 0), 0)
 
-    setMetrics({ totalSwiped, commissionToday, pendingCollections, transactionsToday, commissionCollectedToday, amountToSettle })
+    setMetrics({ totalSwiped, commissionToday, pendingCollections, transactionsToday, commissionCollectedToday, amountToSettle, cashInBank, cashInHand, amountInCards })
     setRecentTxns((recent as Transaction[]) || [])
     setLoading(false)
   }, [])
@@ -711,6 +718,11 @@ export default function DashboardPage() {
         <MetricCard label="Transactions Today" value={String(metrics.transactionsToday)} data={txnData} timeLabel="Last 8 days (sparkline)" loading={loading} />
         <MetricCard label="Commission Collected Today" value={loading ? '—' : fmt(Math.round(metrics.commissionCollectedToday))} data={avgCommData} timeLabel="Today's commission earned" loading={loading} />
         <MetricCard label="Amount to Settle" value={loading ? '—' : fmt(Math.round(metrics.amountToSettle))} data={defCommData} timeLabel="Pending across all transactions" loading={loading} />
+      </div>
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <MetricCard label="Cash in Bank" value={loading ? '—' : fmt(Math.round(metrics.cashInBank))} data={[]} timeLabel="Sum of all account balances" loading={loading} />
+        <MetricCard label="Cash in Hand" value={loading ? '—' : fmt(Math.round(metrics.cashInHand))} data={[]} timeLabel="Chamunda sheet closing balance" loading={loading} />
+        <MetricCard label="Amount in Cards" value={loading ? '—' : fmt(Math.round(metrics.amountInCards))} data={[]} timeLabel="Total card refill amount" loading={loading} />
       </div>
 
       {/* Backup Status */}

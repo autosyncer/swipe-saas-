@@ -12,6 +12,9 @@ interface KPIData {
   txnCount: number
   commissionCollectedToday: number
   amountToSettle: number
+  cashInBank: number
+  cashInHand: number
+  amountInCards: number
 }
 
 interface StatusEntry {
@@ -217,6 +220,9 @@ export function PrintableReport({ data, filters, onClose }: Props) {
                 { label: 'Transactions', value: String(data.kpis.txnCount), sub: 'Total entries' },
                 { label: 'Commission Collected Today', value: fc(data.kpis.commissionCollectedToday), sub: "Today's commission earned" },
                 { label: 'Amount to Settle', value: fc(data.kpis.amountToSettle), sub: 'Pending across all transactions' },
+                { label: 'Cash in Bank', value: fc(data.kpis.cashInBank), sub: 'Sum of all account balances' },
+                { label: 'Cash in Hand', value: fc(data.kpis.cashInHand), sub: 'Chamunda sheet closing balance' },
+                { label: 'Amount in Cards', value: fc(data.kpis.amountInCards), sub: 'Total card refill amount' },
               ].map(k => (
                 <div key={k.label} className="kpi-card">
                   <div className="kpi-label">{k.label}</div>

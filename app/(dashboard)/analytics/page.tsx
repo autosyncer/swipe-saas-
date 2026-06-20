@@ -22,6 +22,9 @@ interface KPIData {
   txnCount: number
   commissionCollectedToday: number
   amountToSettle: number
+  cashInBank: number
+  cashInHand: number
+  amountInCards: number
 }
 
 interface KPIPrev {
@@ -396,10 +399,13 @@ export default function AnalyticsPage() {
       const today = new Date().toISOString().split('T')[0]
       let q = supabase.from('transactions').select('total_amount,paid_amount,commission_amount,remarks').gte('date', start).lte('date', end)
       q = applyAccountFilter(q)
-      const [{ data, error }, { data: todayData }, { data: pendingData }] = await Promise.all([
+      const [{ data, error }, { data: todayData }, { data: pendingData }, { data: bankAccs }, { data: chamundaRows }, { data: refillTxns }] = await Promise.all([
         q,
         supabase.from('transactions').select('commission_amount').eq('date', today),
         supabase.from('transactions').select('total_amount,paid_amount').in('remarks', ['PEND', 'UNPAID', 'PURU']),
+        supabase.from('bank_accounts').select('current_balance'),
+        supabase.from('chamunda_sheet').select('closing_balance').eq('row_type', 'total').order('date', { ascending: false }).limit(1),
+        supabase.from('transactions').select('total_amount').eq('entry_type', 'refill'),
       ])
       if (error) throw error
 
@@ -409,8 +415,11 @@ export default function AnalyticsPage() {
       const txnCount = data?.length ?? 0
       const commissionCollectedToday = todayData?.reduce((s, t) => s + (Number(t.commission_amount) || 0), 0) ?? 0
       const amountToSettle = pendingData?.reduce((s, t) => s + Math.max(0, (Number(t.total_amount) - Number(t.paid_amount)) || 0), 0) ?? 0
+      const cashInBank = (bankAccs as { current_balance: number }[] || []).reduce((s, b) => s + (Number(b.current_balance) || 0), 0)
+      const cashInHand = Number((chamundaRows as { closing_balance: number }[] || [])[0]?.closing_balance || 0)
+      const amountInCards = (refillTxns as { total_amount: number }[] || []).reduce((s, t) => s + (Number(t.total_amount) || 0), 0)
 
-      setKpi({ totalSwiped, totalCommission, totalOutstanding, txnCount, commissionCollectedToday, amountToSettle })
+      setKpi({ totalSwiped, totalCommission, totalOutstanding, txnCount, commissionCollectedToday, amountToSettle, cashInBank, cashInHand, amountInCards })
 
       // Previous period
       if (compare) {
@@ -834,6 +843,26 @@ export default function AnalyticsPage() {
           title="Amount to Settle"
           value={kpi ? fmt(Math.round(kpi.amountToSettle)) : '—'}
           sub="pending across all transactions"
+          loading={loadingKPI}
+        />
+      </div>
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        <KPICard
+          title="Cash in Bank"
+          value={kpi ? fmt(Math.round(kpi.cashInBank)) : '—'}
+          sub="sum of all account balances"
+          loading={loadingKPI}
+        />
+        <KPICard
+          title="Cash in Hand"
+          value={kpi ? fmt(Math.round(kpi.cashInHand)) : '—'}
+          sub="chamunda sheet closing balance"
+          loading={loadingKPI}
+        />
+        <KPICard
+          title="Amount in Cards"
+          value={kpi ? fmt(Math.round(kpi.amountInCards)) : '—'}
+          sub="total card refill amount"
           loading={loadingKPI}
         />
       </div>
