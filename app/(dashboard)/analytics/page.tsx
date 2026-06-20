@@ -844,44 +844,8 @@ export default function AnalyticsPage() {
         />
       </div>
 
-      {/* ── SECTION 3: Main Charts Row ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-        <ChartCard title="Daily Swipe Volume" loading={loadingDaily} error={errorDaily} onRetry={fetchDailyVolume} height={260}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={dailyVolume} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9ca3af' }} tickFormatter={v => v.slice(5)} />
-              <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickFormatter={fmtShort} width={52} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Bar dataKey="total" name="Total" fill="#3b82f6" radius={[3, 3, 0, 0]} />
-              <Bar dataKey="paid" name="Paid" fill="#3ECF8E" radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartCard>
-
-        <ChartCard title="Commission Trend" loading={loadingDaily} error={errorDaily} onRetry={fetchDailyVolume} height={260}>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={dailyVolume} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="commGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#3ECF8E" stopOpacity={0.2} />
-                  <stop offset="95%" stopColor="#3ECF8E" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9ca3af' }} tickFormatter={v => v.slice(5)} />
-              <YAxis tick={{ fontSize: 10, fill: '#9ca3af' }} tickFormatter={fmtShort} width={52} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              <Area type="monotone" dataKey="commission" name="Commission" stroke="#3ECF8E" strokeWidth={2} fill="url(#commGrad)" dot={{ r: 3, fill: '#3ECF8E' }} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartCard>
-      </div>
-
-      {/* ── SECTION 4: Second Charts Row ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+      {/* ── SECTION 3: Account Breakdown ── */}
+      <div className="grid grid-cols-1 mb-6">
         <ChartCard title="Account-wise Volume Breakdown" loading={loadingAccount} error={errorAccount} onRetry={fetchAccountBreakdown} height={280}>
           <div className="flex items-center gap-4 h-full">
             <ResponsiveContainer width="55%" height="100%">
@@ -908,18 +872,6 @@ export default function AnalyticsPage() {
               })}
             </div>
           </div>
-        </ChartCard>
-
-        <ChartCard title="Machine-wise Volume" loading={loadingMachine} error={errorMachine} onRetry={fetchMachinePerf} height={280}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={machinePerf.slice(0, 10)} layout="vertical" margin={{ top: 4, right: 8, left: 60, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" horizontal={false} />
-              <XAxis type="number" tick={{ fontSize: 10, fill: '#9ca3af' }} tickFormatter={fmtShort} />
-              <YAxis type="category" dataKey="machine" tick={{ fontSize: 10, fill: '#9ca3af' }} width={58} />
-              <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="total" name="Total Swiped" fill="#3ECF8E" radius={[0, 3, 3, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
         </ChartCard>
       </div>
 
