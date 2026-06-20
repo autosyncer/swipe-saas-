@@ -867,19 +867,21 @@ function EntryPageInner() {
 
       {/* ── LEFT FORM 40% ── */}
       <div className="w-[40%] flex flex-col gap-3 overflow-y-auto pb-6">
-        {/* L-15 + Expenses quick buttons */}
-        <div className="flex items-center gap-2">
-          <button onClick={() => { fetchL15(); setShowL15(true) }}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border hover:bg-gray-50"
-            style={{ borderColor: '#e5e7eb' }}>
-            <Plus size={12} /> L-15 Entries
-          </button>
-          <button onClick={openExpensePopup}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border hover:bg-gray-50"
-            style={{ borderColor: '#e5e7eb' }}>
-            <Plus size={12} /> Expenses
-          </button>
-        </div>
+        {/* L-15 + Expenses quick buttons — swap only */}
+        {entryType === 'swap' && (
+          <div className="flex items-center gap-2">
+            <button onClick={() => { fetchL15(); setShowL15(true) }}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border hover:bg-gray-50"
+              style={{ borderColor: '#e5e7eb' }}>
+              <Plus size={12} /> L-15 Entries
+            </button>
+            <button onClick={openExpensePopup}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium border hover:bg-gray-50"
+              style={{ borderColor: '#e5e7eb' }}>
+              <Plus size={12} /> Expenses
+            </button>
+          </div>
+        )}
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
