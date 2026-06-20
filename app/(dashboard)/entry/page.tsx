@@ -156,7 +156,7 @@ function EntryPageInner() {
 
   // Commodity calculator + invoice
   const router = useRouter()
-  const [showCommodities, setShowCommodities] = useState(false)
+  const [showCommodities, setShowCommodities] = useState(true)
   const [availableCommodities, setAvailableCommodities] = useState<{ id: string; name: string; unit: string; current_price: number }[]>([])
   const [commodityItems, setCommodityItems] = useState<{ commodity_id: string; name: string; unit: string; qty: number; price: number; subtotal: number }[]>([])
   const [generatedInvoice, setGeneratedInvoice] = useState<{ invoice_number: string; customer_name: string; total_amount: number; items: { name: string; unit: string; qty: number; subtotal: number }[] } | null>(null)
@@ -238,10 +238,16 @@ function EntryPageInner() {
     setPaymentAccounts((data as typeof paymentAccounts) || [])
   }
 
-  // ── Load active commodities ──
+  // ── Load active commodities and auto-select first one ──
   useEffect(() => {
     supabase.from('commodities').select('id, name, unit, current_price').eq('is_active', true).order('name').then(({ data }) => {
-      setAvailableCommodities(data ?? [])
+      const list = data ?? []
+      setAvailableCommodities(list)
+      if (list.length > 0) {
+        const first = list[0]
+        const price = Number(first.current_price || 0)
+        setCommodityItems([{ commodity_id: first.id, name: first.name, unit: first.unit || 'pcs', qty: 1, price, subtotal: price }])
+      }
     })
   }, [])
 
@@ -449,8 +455,10 @@ function EntryPageInner() {
     setReminderTime('09:00')
     setReminderType('payment')
     setReminderNotes('')
-    setShowCommodities(false)
-    setCommodityItems([])
+    setShowCommodities(true)
+    // Re-seed with first commodity after reset
+    const first = availableCommodities[0]
+    setCommodityItems(first ? [{ commodity_id: first.id, name: first.name, unit: first.unit || 'pcs', qty: 1, price: Number(first.current_price || 0), subtotal: Number(first.current_price || 0) }] : [])
     setGeneratedInvoice(null)
     setGeneratingInvoice(false)
   }
@@ -820,7 +828,7 @@ function EntryPageInner() {
           swap_amount: totalSwapAcrossEntries,
           card_last4: snapCardLast4,
         }
-        const commodityItemsToUse = snapShowCommodities ? snapCommodityItems : []
+        const commodityItemsToUse = snapCommodityItems.filter(i => i.commodity_id && i.qty > 0)
         invoiceResult = await generateInvoice(txWithCustomer, commodityItemsToUse)
         if (invoiceResult) setGeneratedInvoice(invoiceResult)
       }
