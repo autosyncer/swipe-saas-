@@ -32,10 +32,16 @@ function fmtDate(d: string) {
   const [y, m, day] = d.split('-')
   return `${day}/${m}/${y}`
 }
+function fmtDateTime(iso: string) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })
+}
 
 export default function SettlementPage() {
   const [swapPending, setSwapPending] = useState<Transaction[]>([])
   const [acctPending, setAcctPending] = useState<Transaction[]>([])
+  const [releaseTimeMap, setReleaseTimeMap] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [releasing, setReleasing] = useState<string | null>(null)
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null)
@@ -58,8 +64,9 @@ export default function SettlementPage() {
     setLoading(true)
     try {
       // ── Card Swap: pending release ──
-      const { data: released } = await supabase.from('swap_releases').select('transaction_id')
+      const { data: released } = await supabase.from('swap_releases').select('transaction_id,created_at')
       const releasedIds = new Set((released || []).map((r: { transaction_id: string }) => r.transaction_id))
+      const releaseTimeMap = Object.fromEntries((released || []).map((r: { transaction_id: string; created_at: string }) => [r.transaction_id, r.created_at]))
 
       const { data: swaps } = await supabase
         .from('transactions')
@@ -67,6 +74,7 @@ export default function SettlementPage() {
         .eq('entry_type', 'swap')
         .order('created_at', { ascending: false })
 
+      setReleaseTimeMap(releaseTimeMap)
       setSwapPending(((swaps || []).filter((t: Transaction) => !releasedIds.has(t.id))) as Transaction[])
 
       // ── Account Settlement: any transaction with paid_amount < total_amount ──
@@ -274,6 +282,9 @@ export default function SettlementPage() {
                       <span>Machine: <span className="font-medium text-[#374151]">{txn.swap_name || '—'}</span></span>
                       <span>Comm: <span className="font-medium text-[#374151]">{txn.commission_pct}% {txn.commission_type}</span></span>
                     </div>
+                    <div className="flex items-center gap-4 text-[11px] text-[#9ca3af] mt-0.5">
+                      <span>🕐 Swap: <span className="text-[#374151] font-medium">{fmtDateTime(txn.created_at)}</span></span>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
@@ -461,12 +472,18 @@ export default function SettlementPage() {
               </div>
 
               {/* Amounts row */}
-              <div className="flex gap-6 text-sm mb-4 flex-wrap">
+              <div className="flex gap-6 text-sm mb-3 flex-wrap">
                 <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Total Amount</div><div className="font-bold">₹{fmt(total)}</div></div>
                 <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Paid</div><div className="font-bold" style={{ color: '#16a34a' }}>₹{fmt(paid)}</div></div>
                 <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Pending</div><div className="font-bold" style={{ color: pending > 0 ? '#dc2626' : '#16a34a' }}>₹{fmt(pending)}</div></div>
                 <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Commission</div><div className="font-bold" style={{ color: '#7c3aed' }}>{srTxn.commission_pct}% — ₹{fmt(Math.round(commAmt))}</div></div>
                 <div><div className="text-[10px] text-[#9ca3af] mb-0.5">Comm Type</div><div className="font-bold text-[#374151]">{srTxn.commission_type}</div></div>
+              </div>
+              <div className="flex gap-6 text-[11px] text-[#9ca3af] mb-4 flex-wrap">
+                <span>🕐 Swap: <span className="text-[#374151] font-medium">{fmtDateTime(srTxn.created_at)}</span></span>
+                {releaseTimeMap[srTxn.id] && (
+                  <span>✅ Settled: <span className="text-[#16a34a] font-medium">{fmtDateTime(releaseTimeMap[srTxn.id])}</span></span>
+                )}
               </div>
 
               {!isFullyPaid && (
