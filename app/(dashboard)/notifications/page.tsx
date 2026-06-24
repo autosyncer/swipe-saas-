@@ -120,7 +120,8 @@ export default function SettlementPage() {
     setSwapPending(prev => prev.filter(t => t.id !== txn.id))
 
     try {
-      const { error } = await supabase.from('swap_releases').insert({ transaction_id: txn.id })
+      const { data: { user } } = await supabase.auth.getUser()
+      const { error } = await supabase.from('swap_releases').insert({ transaction_id: txn.id, settled_by: user?.id ?? null })
       if (error) {
         setSwapPending(prev => [txn, ...prev])
         showToast('Release failed: ' + error.message, 'error')

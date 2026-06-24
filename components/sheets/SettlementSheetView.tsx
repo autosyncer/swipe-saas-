@@ -44,8 +44,22 @@ function fmtDate(d: string) {
   return `${day}/${m}/${y.slice(2)}`
 }
 
+function fmtDateTime(iso: string) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true })
+}
+
+interface ReleaseInfo {
+  transaction_id: string
+  created_at: string
+  settled_by: string | null
+}
+
 export default function SettlementSheetView() {
   const [rows, setRows] = useState<SettlementRow[]>([])
+  const [releaseMap, setReleaseMap] = useState<Record<string, ReleaseInfo>>({})
+  const [profileMap, setProfileMap] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [dateFilter, setDateFilter] = useState(() => new Date().toISOString().split('T')[0])
   const [showAll, setShowAll] = useState(false)
@@ -53,9 +67,21 @@ export default function SettlementSheetView() {
   const fetchRows = useCallback(async () => {
     setLoading(true)
 
-    // Get all released transaction IDs from the reliable swap_releases table
-    const { data: released } = await supabase.from('swap_releases').select('transaction_id')
-    const releasedIds = new Set((released || []).map((r: { transaction_id: string }) => r.transaction_id))
+    // Get all released transaction IDs with settlement time and settler
+    const { data: released } = await supabase.from('swap_releases').select('transaction_id,created_at,settled_by')
+    const rMap: Record<string, ReleaseInfo> = {}
+    ;(released || []).forEach((r: ReleaseInfo) => { rMap[r.transaction_id] = r })
+    const releasedIds = new Set(Object.keys(rMap))
+    setReleaseMap(rMap)
+
+    // Fetch profiles for settler names
+    const settlerIds = Array.from(new Set((released || []).map((r: ReleaseInfo) => r.settled_by).filter(Boolean))) as string[]
+    if (settlerIds.length > 0) {
+      const { data: profiles } = await supabase.from('profiles').select('id,full_name').in('id', settlerIds)
+      const pMap: Record<string, string> = {}
+      ;(profiles || []).forEach((p: { id: string; full_name: string }) => { pMap[p.id] = p.full_name })
+      setProfileMap(pMap)
+    }
 
     let query = supabase
       .from('transactions')
@@ -193,7 +219,7 @@ export default function SettlementSheetView() {
           <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
             <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
               <tr style={{ background: '#3ECF8E' }}>
-                {['SR', 'DATE', 'CUSTOMER', 'BANK CARD', 'ACCOUNT', 'MACHINE', 'TOTAL AMT', 'SWAP AMT', 'CASH TYPE', 'PAID CASH', 'COMM %', 'COMM AMT', 'COMM TYPE', 'SETTLEMENT'].map(h => (
+                {['SR', 'DATE', 'CUSTOMER', 'BANK CARD', 'ACCOUNT', 'MACHINE', 'TOTAL AMT', 'SWAP AMT', 'CASH TYPE', 'PAID CASH', 'COMM %', 'COMM AMT', 'COMM TYPE', 'SETTLEMENT', 'SETTLED AT', 'SETTLED BY'].map(h => (
                   <th key={h} style={{ ...CS, fontWeight: 700, color: '#fff', background: '#3ECF8E', textAlign: 'center' }}>{h}</th>
                 ))}
               </tr>
@@ -247,6 +273,12 @@ export default function SettlementSheetView() {
                       {r.release_status === 'released' ? '✓ Settled' : '⏳ Not Settled'}
                     </span>
                   </td>
+                  <td style={{ ...CS, textAlign: 'center', fontSize: 11, color: '#374151' }}>
+                    {releaseMap[r.id] ? fmtDateTime(releaseMap[r.id].created_at) : '—'}
+                  </td>
+                  <td style={{ ...CS, fontWeight: 600, color: '#1d4ed8', whiteSpace: 'nowrap' }}>
+                    {releaseMap[r.id]?.settled_by ? (profileMap[releaseMap[r.id].settled_by!] || '—') : '—'}
+                  </td>
                 </tr>
               ))}
               {/* Total row */}
@@ -256,7 +288,7 @@ export default function SettlementSheetView() {
                 <td style={{ ...CS, textAlign: 'right', color: '#16a34a' }}>₹{fmt(totalSwap)}</td>
                 <td colSpan={3} style={{ ...CS }}></td>
                 <td style={{ ...CS, textAlign: 'right', color: '#dc2626' }}>₹{fmt(totalComm)}</td>
-                <td colSpan={2} style={{ ...CS }}></td>
+                <td colSpan={4} style={{ ...CS }}></td>
               </tr>
             </tbody>
           </table>
