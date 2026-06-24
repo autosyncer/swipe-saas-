@@ -40,6 +40,7 @@ function fmtDateTime(iso: string) {
 
 export default function SettlementPage() {
   const [swapPending, setSwapPending] = useState<Transaction[]>([])
+  const [swapSettled, setSwapSettled] = useState<Transaction[]>([])
   const [acctPending, setAcctPending] = useState<Transaction[]>([])
   const [releaseTimeMap, setReleaseTimeMap] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
@@ -76,6 +77,7 @@ export default function SettlementPage() {
 
       setReleaseTimeMap(releaseTimeMap)
       setSwapPending(((swaps || []).filter((t: Transaction) => !releasedIds.has(t.id))) as Transaction[])
+      setSwapSettled(((swaps || []).filter((t: Transaction) => releasedIds.has(t.id)).slice(0, 20)) as Transaction[])
 
       // ── Account Settlement: any transaction with paid_amount < total_amount ──
       const { data: allTxns } = await supabase
@@ -313,6 +315,55 @@ export default function SettlementPage() {
     </div>
   )
 
+  const settledSection = swapSettled.length > 0 && (
+    <div className="mt-6">
+      <div className="flex items-center gap-2 mb-3">
+        <CheckCircle size={16} color="#16a34a" />
+        <span className="text-sm font-bold text-[#1a1a1a] uppercase tracking-wide">Recently Settled</span>
+        <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ background: '#d1fae5', color: '#065f46' }}>{swapSettled.length}</span>
+      </div>
+      <div className="flex flex-col gap-3">
+        {swapSettled.map(txn => {
+          const swapAmt = Number(txn.swap_amount || txn.total_amount || 0)
+          const settledAt = releaseTimeMap[txn.id]
+          return (
+            <div key={txn.id} className="bg-white rounded-xl border p-4"
+              style={{ borderColor: '#bbf7d0', boxShadow: '0 1px 4px rgba(0,0,0,0.04)' }}>
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="flex items-start gap-3 flex-1 min-w-0">
+                  <div className="flex-shrink-0 rounded-full flex items-center justify-center"
+                    style={{ width: 34, height: 34, background: '#f0fdf4', border: '1.5px solid #86efac' }}>
+                    <CheckCircle size={15} color="#16a34a" />
+                  </div>
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-[#1a1a1a] text-sm">{txn.customer_name}</span>
+                      <span className="text-xs text-[#6b7280]">SR #{txn.sr_no}</span>
+                      {txn.bank_card && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#f3f4f6] text-[#374151]">{txn.bank_card}</span>}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-[#6b7280] flex-wrap">
+                      <span>Account: <span className="font-medium text-[#374151]">{txn.account_name}</span></span>
+                      <span>Machine: <span className="font-medium text-[#374151]">{txn.swap_name || '—'}</span></span>
+                      <span>Comm: <span className="font-medium text-[#374151]">{txn.commission_pct}% {txn.commission_type}</span></span>
+                    </div>
+                    <div className="flex gap-4 text-[11px] mt-0.5 flex-wrap">
+                      <span className="text-[#9ca3af]">🕐 Swap: <span className="text-[#374151] font-medium">{fmtDateTime(txn.created_at)}</span></span>
+                      {settledAt && <span className="text-[#9ca3af]">✅ Settled: <span className="text-[#16a34a] font-medium">{fmtDateTime(settledAt)}</span></span>}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <div className="text-[10px] text-[#9ca3af]">Swap Amt</div>
+                  <div className="text-sm font-bold text-[#1a1a1a]">₹{fmt(swapAmt)}</div>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+
   const acctSection = (
     <div>
       <div className="flex items-center gap-2 mb-3">
@@ -531,7 +582,8 @@ export default function SettlementPage() {
       ) : (
         <>
           {swapSection}
-          <div style={{ height: 1, background: '#e5e7eb', marginBottom: 24 }} />
+          {settledSection}
+          <div style={{ height: 1, background: '#e5e7eb', marginTop: 24, marginBottom: 24 }} />
           {acctSection}
         </>
       )}
