@@ -1296,132 +1296,6 @@ function EntryPageInner() {
                 </div>
               )}
 
-              {/* Commission */}
-              {(() => {
-                const total = parseFloat(entry.totalAmount) || 0
-                const comm = parseFloat(entry.commPct) || 0
-                const commAmt = total > 0 ? Math.round(total * comm / 100) : 0
-                const swapAmt = entry.commType === 'Inclusive' ? total + commAmt : total
-                const needsPayMode = entry.commType === 'Exclusive' || entry.commType === 'Deferred'
-                return (
-                  <div className="flex flex-col gap-2">
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className={labelCls}>Commission %</label>
-                        <input type="number" step="0.01" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                          value={entry.commPct}
-                          onChange={e => updateEntry(entry.id, { commPct: e.target.value })}
-                          placeholder="2.20"
-                        />
-                      </div>
-                      <div>
-                        <label className={labelCls}>Commission Type</label>
-                        <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
-                          value={entry.commType}
-                          onChange={e => updateEntry(entry.id, { commType: e.target.value, commPayMode: 'Cash', commUpiId: '', commNetBankId: '' })}
-                        >
-                          <option value="Inclusive">Inclusive</option>
-                          <option value="Exclusive">Exclusive</option>
-                          <option value="Deferred">Deferred</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Commission Type Logic Summary */}
-                    <div className="rounded-md px-3 py-2 text-xs" style={{
-                      background: entry.commType === 'Inclusive' ? '#f0fdf4' : entry.commType === 'Deferred' ? '#fff7ed' : '#eff6ff',
-                      border: `1px solid ${entry.commType === 'Inclusive' ? '#bbf7d0' : entry.commType === 'Deferred' ? '#fed7aa' : '#bfdbfe'}`,
-                    }}>
-                      {entry.commType === 'Inclusive' && (
-                        <div className="flex flex-col gap-0.5 text-[#166534]">
-                          <span className="font-semibold">Inclusive — commission included in swap amount</span>
-                          <span>Swap = Total + Commission &nbsp;|&nbsp; Difference = 0 &nbsp;|&nbsp; No separate payment needed</span>
-                          {total > 0 && <span className="font-medium mt-0.5">₹{total.toLocaleString('en-IN')} + ₹{commAmt.toLocaleString('en-IN')} = Swap ₹{swapAmt.toLocaleString('en-IN')}</span>}
-                        </div>
-                      )}
-                      {entry.commType === 'Exclusive' && (
-                        <div className="flex flex-col gap-0.5 text-[#1e40af]">
-                          <span className="font-semibold">Exclusive — commission paid separately by customer</span>
-                          <span>Swap = Total &nbsp;|&nbsp; Difference = Commission amount &nbsp;|&nbsp; Paid via UPI / Cash / Net Banking</span>
-                          {total > 0 && <span className="font-medium mt-0.5">Swap ₹{swapAmt.toLocaleString('en-IN')} &nbsp;|&nbsp; Collect ₹{commAmt.toLocaleString('en-IN')} separately</span>}
-                        </div>
-                      )}
-                      {entry.commType === 'Deferred' && (
-                        <div className="flex flex-col gap-0.5 text-[#9a3412]">
-                          <span className="font-semibold">Deferred — commission to be collected later</span>
-                          <span>Swap = Total &nbsp;|&nbsp; Difference = Commission amount &nbsp;|&nbsp; Added to deferred list for follow-up</span>
-                          {total > 0 && <span className="font-medium mt-0.5">Amount to collect later: ₹{commAmt.toLocaleString('en-IN')}</span>}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Pay Mode (Exclusive + Deferred) */}
-                    {needsPayMode && (
-                      <div className="flex flex-col gap-2">
-                        <div>
-                          <label className={labelCls}>{entry.commType === 'Deferred' ? 'Will Pay Via' : 'Commission Pay Mode'}</label>
-                          <div className="flex gap-2">
-                            {(['Cash', 'UPI', 'Net Banking'] as const).map(mode => (
-                              <button
-                                key={mode}
-                                type="button"
-                                onClick={() => updateEntry(entry.id, { commPayMode: mode, commUpiId: '', commNetBankId: '' })}
-                                className="flex-1 py-1.5 rounded-md text-xs font-medium border transition-colors"
-                                style={{
-                                  background: entry.commPayMode === mode ? '#1a1a1a' : '#f9fafb',
-                                  color: entry.commPayMode === mode ? '#ffffff' : '#374151',
-                                  borderColor: entry.commPayMode === mode ? '#1a1a1a' : '#e5e7eb',
-                                }}
-                              >{mode}</button>
-                            ))}
-                          </div>
-                        </div>
-
-                        {entry.commPayMode === 'UPI' && (
-                          <div>
-                            <label className={labelCls}>UPI Account</label>
-                            <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
-                              value={entry.commUpiId}
-                              onChange={e => updateEntry(entry.id, { commUpiId: e.target.value })}
-                            >
-                              <option value="">Select UPI...</option>
-                              {upiAccounts.map(u => (
-                                <option key={u.id} value={u.id}>{u.name} — {u.upi_id}</option>
-                              ))}
-                            </select>
-                            {upiAccounts.length === 0 && (
-                              <p className="text-[10px] text-[#9ca3af] mt-1">No UPI accounts. Add them in the Sheets page.</p>
-                            )}
-                          </div>
-                        )}
-
-                        {entry.commPayMode === 'Net Banking' && (
-                          <div>
-                            <label className={labelCls}>Net Banking Account</label>
-                            <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
-                              value={entry.commNetBankId}
-                              onChange={e => updateEntry(entry.id, { commNetBankId: e.target.value })}
-                            >
-                              <option value="">Select account...</option>
-                              {netBankAccounts.map(nb => (
-                                <option key={nb.id} value={nb.id}>{nb.name} — {nb.bank_name} {nb.account_number}</option>
-                              ))}
-                            </select>
-                            {netBankAccounts.length === 0 && (
-                              <p className="text-[10px] text-[#9ca3af] mt-1">No net banking accounts. Add them in the Sheets page.</p>
-                            )}
-                          </div>
-                        )}
-
-                        {entry.commPayMode === 'Cash' && (
-                          <p className="text-[10px] text-[#6b7280] -mt-1">Cash commission will be recorded in Chamunda Sheet.</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })()}
-
               {/* Total + Paid + Pending */}
               {(() => {
                 const totalVal = parseFloat(entry.totalAmount) || 0
@@ -1638,6 +1512,132 @@ function EntryPageInner() {
                   </div>
                 </div>
               )}
+
+              {/* Commission */}
+              {(() => {
+                const total = parseFloat(entry.totalAmount) || 0
+                const comm = parseFloat(entry.commPct) || 0
+                const commAmt = total > 0 ? Math.round(total * comm / 100) : 0
+                const swapAmt = entry.commType === 'Inclusive' ? total + commAmt : total
+                const needsPayMode = entry.commType === 'Exclusive' || entry.commType === 'Deferred'
+                return (
+                  <div className="flex flex-col gap-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className={labelCls}>Commission %</label>
+                        <input type="number" step="0.01" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                          value={entry.commPct}
+                          onChange={e => updateEntry(entry.id, { commPct: e.target.value })}
+                          placeholder="2.20"
+                        />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Commission Type</label>
+                        <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
+                          value={entry.commType}
+                          onChange={e => updateEntry(entry.id, { commType: e.target.value, commPayMode: 'Cash', commUpiId: '', commNetBankId: '' })}
+                        >
+                          <option value="Inclusive">Inclusive</option>
+                          <option value="Exclusive">Exclusive</option>
+                          <option value="Deferred">Deferred</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Commission Type Logic Summary */}
+                    <div className="rounded-md px-3 py-2 text-xs" style={{
+                      background: entry.commType === 'Inclusive' ? '#f0fdf4' : entry.commType === 'Deferred' ? '#fff7ed' : '#eff6ff',
+                      border: `1px solid ${entry.commType === 'Inclusive' ? '#bbf7d0' : entry.commType === 'Deferred' ? '#fed7aa' : '#bfdbfe'}`,
+                    }}>
+                      {entry.commType === 'Inclusive' && (
+                        <div className="flex flex-col gap-0.5 text-[#166534]">
+                          <span className="font-semibold">Inclusive — commission included in swap amount</span>
+                          <span>Swap = Total + Commission &nbsp;|&nbsp; Difference = 0 &nbsp;|&nbsp; No separate payment needed</span>
+                          {total > 0 && <span className="font-medium mt-0.5">₹{total.toLocaleString('en-IN')} + ₹{commAmt.toLocaleString('en-IN')} = Swap ₹{swapAmt.toLocaleString('en-IN')}</span>}
+                        </div>
+                      )}
+                      {entry.commType === 'Exclusive' && (
+                        <div className="flex flex-col gap-0.5 text-[#1e40af]">
+                          <span className="font-semibold">Exclusive — commission paid separately by customer</span>
+                          <span>Swap = Total &nbsp;|&nbsp; Difference = Commission amount &nbsp;|&nbsp; Paid via UPI / Cash / Net Banking</span>
+                          {total > 0 && <span className="font-medium mt-0.5">Swap ₹{swapAmt.toLocaleString('en-IN')} &nbsp;|&nbsp; Collect ₹{commAmt.toLocaleString('en-IN')} separately</span>}
+                        </div>
+                      )}
+                      {entry.commType === 'Deferred' && (
+                        <div className="flex flex-col gap-0.5 text-[#9a3412]">
+                          <span className="font-semibold">Deferred — commission to be collected later</span>
+                          <span>Swap = Total &nbsp;|&nbsp; Difference = Commission amount &nbsp;|&nbsp; Added to deferred list for follow-up</span>
+                          {total > 0 && <span className="font-medium mt-0.5">Amount to collect later: ₹{commAmt.toLocaleString('en-IN')}</span>}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Pay Mode (Exclusive + Deferred) */}
+                    {needsPayMode && (
+                      <div className="flex flex-col gap-2">
+                        <div>
+                          <label className={labelCls}>{entry.commType === 'Deferred' ? 'Will Pay Via' : 'Commission Pay Mode'}</label>
+                          <div className="flex gap-2">
+                            {(['Cash', 'UPI', 'Net Banking'] as const).map(mode => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => updateEntry(entry.id, { commPayMode: mode, commUpiId: '', commNetBankId: '' })}
+                                className="flex-1 py-1.5 rounded-md text-xs font-medium border transition-colors"
+                                style={{
+                                  background: entry.commPayMode === mode ? '#1a1a1a' : '#f9fafb',
+                                  color: entry.commPayMode === mode ? '#ffffff' : '#374151',
+                                  borderColor: entry.commPayMode === mode ? '#1a1a1a' : '#e5e7eb',
+                                }}
+                              >{mode}</button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {entry.commPayMode === 'UPI' && (
+                          <div>
+                            <label className={labelCls}>UPI Account</label>
+                            <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
+                              value={entry.commUpiId}
+                              onChange={e => updateEntry(entry.id, { commUpiId: e.target.value })}
+                            >
+                              <option value="">Select UPI...</option>
+                              {upiAccounts.map(u => (
+                                <option key={u.id} value={u.id}>{u.name} — {u.upi_id}</option>
+                              ))}
+                            </select>
+                            {upiAccounts.length === 0 && (
+                              <p className="text-[10px] text-[#9ca3af] mt-1">No UPI accounts. Add them in the Sheets page.</p>
+                            )}
+                          </div>
+                        )}
+
+                        {entry.commPayMode === 'Net Banking' && (
+                          <div>
+                            <label className={labelCls}>Net Banking Account</label>
+                            <select className={`${inputCls} bg-white`} style={{ borderColor: '#e5e7eb' }}
+                              value={entry.commNetBankId}
+                              onChange={e => updateEntry(entry.id, { commNetBankId: e.target.value })}
+                            >
+                              <option value="">Select account...</option>
+                              {netBankAccounts.map(nb => (
+                                <option key={nb.id} value={nb.id}>{nb.name} — {nb.bank_name} {nb.account_number}</option>
+                              ))}
+                            </select>
+                            {netBankAccounts.length === 0 && (
+                              <p className="text-[10px] text-[#9ca3af] mt-1">No net banking accounts. Add them in the Sheets page.</p>
+                            )}
+                          </div>
+                        )}
+
+                        {entry.commPayMode === 'Cash' && (
+                          <p className="text-[10px] text-[#6b7280] -mt-1">Cash commission will be recorded in Chamunda Sheet.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* Remarks — auto-set by payment mode logic, hidden from UI */}
             </div>
