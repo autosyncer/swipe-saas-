@@ -1330,25 +1330,15 @@ function EntryPageInner() {
                 )
               })()}
 
-              {/* Swap + Difference — swap only */}
+              {/* Swap Amount — swap only */}
               {entryType === 'swap' && (
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className={labelCls}>Swap Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
-                    <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                      value={entry.swapAmount}
-                      onChange={e => updateEntry(entry.id, { swapAmount: e.target.value })}
-                      placeholder="0"
-                    />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Difference (₹)</label>
-                    <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                      value={entry.difference}
-                      onChange={e => updateEntry(entry.id, { difference: e.target.value })}
-                      placeholder="Optional"
-                    />
-                  </div>
+                <div>
+                  <label className={labelCls}>Swap Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
+                  <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                    value={entry.swapAmount}
+                    onChange={e => updateEntry(entry.id, { swapAmount: e.target.value })}
+                    placeholder="0"
+                  />
                 </div>
               )}
 
@@ -1515,7 +1505,7 @@ function EntryPageInner() {
                 const needsPayMode = entry.commType === 'Exclusive' || entry.commType === 'Deferred'
                 return (
                   <div className="flex flex-col gap-2">
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
                       <div>
                         <label className={labelCls}>Commission %</label>
                         <input type="number" step="0.01" className={inputCls} style={{ borderColor: '#e5e7eb' }}
@@ -1535,6 +1525,16 @@ function EntryPageInner() {
                           <option value="Deferred">Deferred</option>
                         </select>
                       </div>
+                      {entryType === 'swap' && (
+                        <div>
+                          <label className={labelCls}>Difference (₹)</label>
+                          <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                            value={entry.difference}
+                            onChange={e => updateEntry(entry.id, { difference: e.target.value })}
+                            placeholder="Optional"
+                          />
+                        </div>
+                      )}
                     </div>
 
                     {/* Commission Type Logic Summary */}
