@@ -1668,6 +1668,7 @@ function CCSheetView() {
   const [fMachineId, setFMachineId] = useState('')
   const [fDate, setFDate] = useState(new Date().toISOString().split('T')[0])
   const [fSwipeAmt, setFSwipeAmt] = useState('')
+  const [fOurCommPct, setFOurCommPct] = useState('2.2')
   const [fCustName, setFCustName] = useState('')
   const [fStatus, setFStatus] = useState('PAID')
   const [fAgentCode, setFAgentCode] = useState('')
@@ -1729,7 +1730,7 @@ function CCSheetView() {
   }
 
   function resetInsertForm(){
-    setFMachineId(''); setFDate(new Date().toISOString().split('T')[0]); setFSwipeAmt(''); setFCustName(''); setCustSearch(''); setFStatus('PAID'); setFAgentCode(''); setFTid(''); setSelectedMachine(null); setCustSuggs([])
+    setFMachineId(''); setFDate(new Date().toISOString().split('T')[0]); setFSwipeAmt(''); setFOurCommPct('2.2'); setFCustName(''); setCustSearch(''); setFStatus('PAID'); setFAgentCode(''); setFTid(''); setSelectedMachine(null); setCustSuggs([])
   }
 
   async function handleInsert(){
@@ -1740,7 +1741,8 @@ function CCSheetView() {
     const bankCommPct=m?.bank_commission_pct||1.320
     const bankComm=(swipeAmt*bankCommPct)/100
     const custAmt=swipeAmt-bankComm
-    const ourComm=swipeAmt*2.2/100
+    const ourCommPct=parseFloat(fOurCommPct)||2.2
+    const ourComm=swipeAmt*ourCommPct/100
     const {error}=await supabase.from('cc_sheet').insert({
       machine_id:fMachineId, tid:fTid, machine_name:m?.machine_name||'',
       date:fDate, swipe_amount:swipeAmt, customer_amount:custAmt,
@@ -1931,6 +1933,11 @@ function CCSheetView() {
               <div>
                 <label className={lb}>Swipe Amount *</label>
                 <input type="number" className={inp} style={{borderColor:'#e5e7eb'}} placeholder="0" value={fSwipeAmt} onChange={e=>setFSwipeAmt(e.target.value)}/>
+              </div>
+              <div>
+                <label className={lb}>Our Commission %</label>
+                <input type="number" step="0.01" className={inp} style={{borderColor:'#e5e7eb'}} placeholder="2.2" value={fOurCommPct} onChange={e=>setFOurCommPct(e.target.value)}/>
+                {fSwipeAmt&&<div className="text-[11px] text-[#6b7280] mt-1">= ₹{((parseFloat(fSwipeAmt)||0)*(parseFloat(fOurCommPct)||0)/100).toLocaleString('en-IN')}</div>}
               </div>
               {/* Customer name with autocomplete */}
               <div ref={custRef} className="relative">
