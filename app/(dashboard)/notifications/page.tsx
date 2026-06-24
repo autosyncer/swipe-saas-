@@ -65,8 +65,7 @@ export default function SettlementPage() {
     setLoading(true)
     try {
       // ── Card Swap: pending release ──
-      const { data: released, error: relErr } = await supabase.from('swap_releases').select('transaction_id,created_at')
-      if (relErr) { console.error('[Settlement] swap_releases fetch error:', relErr) }
+      const { data: released } = await supabase.from('swap_releases').select('transaction_id,created_at')
       const releasedIds = new Set((released || []).map((r: { transaction_id: string }) => r.transaction_id))
       const releaseTimeMap = Object.fromEntries((released || []).map((r: { transaction_id: string; created_at: string }) => [r.transaction_id, r.created_at]))
 
@@ -124,9 +123,9 @@ export default function SettlementPage() {
       const { data: { user } } = await supabase.auth.getUser()
       const { error } = await supabase.from('swap_releases').insert({ transaction_id: txn.id, settled_by: user?.id ?? null })
       if (error) {
-        // Duplicate key = already released, treat as success and refresh
+        // Duplicate key = already released, remove from pending directly
         if (error.code === '23505') {
-          await fetchAll()
+          setSwapPending(prev => prev.filter(t => t.id !== txn.id))
           showToast(`SR #${txn.sr_no} already released`, 'success')
           return
         }
