@@ -1330,6 +1330,28 @@ function EntryPageInner() {
                 )
               })()}
 
+              {/* Swap + Difference — swap only */}
+              {entryType === 'swap' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className={labelCls}>Swap Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
+                    <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                      value={entry.swapAmount}
+                      onChange={e => updateEntry(entry.id, { swapAmount: e.target.value })}
+                      placeholder="0"
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Difference (₹)</label>
+                    <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
+                      value={entry.difference}
+                      onChange={e => updateEntry(entry.id, { difference: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Payment Mode — swap only */}
               {entryType === 'swap' && (() => {
                 const MODES: PaymentModeEntry['mode'][] = ['CASH', 'NEFT', 'RTGS', 'UPI', 'GPAY', 'PHONEPAY']
@@ -1342,10 +1364,8 @@ function EntryPageInner() {
                 const toggleMode = (mode: PaymentModeEntry['mode']) => {
                   const existing = entry.paymentModes.find(p => p.mode === mode)
                   if (existing) {
-                    // deselect — remove it
                     updateEntry(entry.id, { paymentModes: entry.paymentModes.filter(p => p.mode !== mode) })
                   } else {
-                    // select — add new row for this mode
                     updateEntry(entry.id, { paymentModes: [...entry.paymentModes, { id: Math.random().toString(36).slice(2), mode, accountId: '', accountName: '', amount: '' }] })
                   }
                 }
@@ -1402,7 +1422,6 @@ function EntryPageInner() {
                             style={{ background: '#f0fdf4', border: '1.5px solid #86efac' }}>
                             <div className="text-[10px] font-bold" style={{ color: '#166534' }}>{pm.mode}</div>
 
-                            {/* Account selector for non-CASH */}
                             {pm.mode !== 'CASH' && (
                               <div>
                                 <select className={inputCls} style={{ borderColor: '#86efac', fontSize: 11 }}
@@ -1421,7 +1440,6 @@ function EntryPageInner() {
                               </div>
                             )}
 
-                            {/* Amount */}
                             <input type="number" className={inputCls}
                               style={{ borderColor: '#86efac', background: '#fff' }}
                               value={pm.amount} placeholder={`${pm.mode} amount (₹)`}
@@ -1431,7 +1449,6 @@ function EntryPageInner() {
                       })}
                     </div>
 
-                    {/* Multi-mode total summary */}
                     {entry.paymentModes.length > 1 && totalPaid > 0 && (
                       <div className="mt-1.5 flex gap-1.5 flex-wrap items-center">
                         {entry.paymentModes.filter(p => p.amount).map(p => (
@@ -1444,7 +1461,6 @@ function EntryPageInner() {
                       </div>
                     )}
 
-                    {/* Pending / Fully Paid banner */}
                     {totalVal > 0 && totalPaid > 0 && pending > 0 && (
                       <div className="mt-1.5 flex items-center justify-between rounded-lg px-3 py-2"
                         style={{ background: '#fef2f2', border: '1.5px solid #fecaca' }}>
@@ -1460,7 +1476,6 @@ function EntryPageInner() {
                       </div>
                     )}
 
-                    {/* Add account inline form */}
                     {showAddPayAcct === entry.id && (
                       <div className="mt-2 rounded-lg p-2.5" style={{ background: '#fffde7', border: '1px solid #fde68a' }}>
                         <div className="text-[10px] font-bold text-[#713f12] mb-1.5">Add Payment Account</div>
@@ -1490,28 +1505,6 @@ function EntryPageInner() {
                   </div>
                 )
               })()}
-
-              {/* Swap + Difference — swap only */}
-              {entryType === 'swap' && (
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className={labelCls}>Swap Amount (₹) <span className="text-[10px] text-[#9ca3af] font-normal">auto</span></label>
-                    <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                      value={entry.swapAmount}
-                      onChange={e => updateEntry(entry.id, { swapAmount: e.target.value })}
-                      placeholder="0"
-                    />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Difference (₹)</label>
-                    <input type="number" className={inputCls} style={{ borderColor: '#e5e7eb' }}
-                      value={entry.difference}
-                      onChange={e => updateEntry(entry.id, { difference: e.target.value })}
-                      placeholder="Optional"
-                    />
-                  </div>
-                </div>
-              )}
 
               {/* Commission */}
               {(() => {
@@ -1576,7 +1569,7 @@ function EntryPageInner() {
                     {needsPayMode && (
                       <div className="flex flex-col gap-2">
                         <div>
-                          <label className={labelCls}>{entry.commType === 'Deferred' ? 'Will Pay Via' : 'Commission Pay Mode'}</label>
+                          <label className={labelCls}>{entry.commType === 'Deferred' ? 'Will Receive Via' : 'Commission Receive Mode'}</label>
                           <div className="flex gap-2">
                             {(['Cash', 'UPI', 'Net Banking'] as const).map(mode => (
                               <button
