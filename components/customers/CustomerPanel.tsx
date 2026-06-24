@@ -243,18 +243,32 @@ export interface CustomerPanelProps {
 
 export default function CustomerPanel({ customer, onClose, onSaved, onDeleteRequest }: CustomerPanelProps) {
   const isEdit = !!customer
+  const DRAFT_KEY = 'customer_add_draft'
+  function loadDraft() {
+    if (isEdit) return null
+    try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null') } catch { return null }
+  }
+  function clearDraft() { localStorage.removeItem(DRAFT_KEY) }
+
+  const draft = loadDraft()
+  const hasDraft = !isEdit && !!draft?.basic?.name
   const [basic, setBasic] = useState({
-    name: customer?.name || '',
-    phone: customer?.phone || '',
-    charge: String(customer?.default_charge_pct || '2.2'),
-    consignee_name: customer?.consignee_name || customer?.name || '',
-    consignee_address: customer?.consignee_address || '',
-    buyer_name: customer?.buyer_name || customer?.name || '',
-    buyer_address: customer?.buyer_address || '',
+    name: customer?.name || draft?.basic?.name || '',
+    phone: customer?.phone || draft?.basic?.phone || '',
+    charge: String(customer?.default_charge_pct || draft?.basic?.charge || '2.2'),
+    consignee_name: customer?.consignee_name || customer?.name || draft?.basic?.consignee_name || '',
+    consignee_address: customer?.consignee_address || draft?.basic?.consignee_address || '',
+    buyer_name: customer?.buyer_name || customer?.name || draft?.basic?.buyer_name || '',
+    buyer_address: customer?.buyer_address || draft?.basic?.buyer_address || '',
   })
-  const [cards, setCards] = useState<DraftCard[]>([])
-  const [accts, setAccts] = useState<DraftAcct[]>([])
-  const [notes, setNotes] = useState<string>(customer?.notes || '')
+  const [cards, setCards] = useState<DraftCard[]>(draft?.cards ?? [])
+  const [accts, setAccts] = useState<DraftAcct[]>(draft?.accts ?? [])
+  const [notes, setNotes] = useState<string>(customer?.notes || draft?.notes || '')
+
+  useEffect(() => {
+    if (isEdit) return
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ basic, cards, accts, notes }))
+  }, [basic, cards, accts, notes, isEdit])
   const [pendingDocs, setPendingDocs] = useState<{ docType: 'aadhaar' | 'pan'; file: File }[]>([])
   const [existingDocs, setExistingDocs] = useState<CustomerDocument[]>([])
   const [uploadingDocs, setUploadingDocs] = useState(false)
@@ -349,6 +363,7 @@ export default function CustomerPanel({ customer, onClose, onSaved, onDeleteRequ
       const { data: saved } = await supabase.from('customers')
         .select('id,name,phone,default_charge_pct,outstanding_balance,consignee_name,consignee_address,buyer_name,buyer_address,notes,cards(*)')
         .eq('id', customerId!).single()
+      clearDraft()
       setTimeout(() => { onSaved(saved as Customer); onClose() }, 1200)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -368,6 +383,10 @@ export default function CustomerPanel({ customer, onClose, onSaved, onDeleteRequ
 
         {/* body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 flex flex-col gap-5">
+          {hasDraft && <div className="bg-amber-50 border border-amber-200 text-amber-700 text-xs px-3 py-2 rounded flex items-center justify-between">
+            <span>Draft restored — you have unsaved changes</span>
+            <button onClick={() => { clearDraft(); window.location.reload() }} className="underline ml-2">Discard</button>
+          </div>}
           {error && <div className="bg-red-50 border border-red-200 text-red-700 text-xs px-3 py-2 rounded">{error}</div>}
           {toast && <div className="bg-green-50 border border-green-200 text-green-700 text-xs px-3 py-2 rounded">{toast}</div>}
 
@@ -552,7 +571,7 @@ export default function CustomerPanel({ customer, onClose, onSaved, onDeleteRequ
               <Trash2 size={14} /> Delete
             </button>
           )}
-          <button onClick={() => { onClose(); setError(null) }}
+          <button onClick={() => { clearDraft(); onClose(); setError(null) }}
             className="flex-1 py-2 rounded-md border text-sm font-medium text-[#374151]"
             style={{ borderColor: '#e5e7eb' }}>
             Cancel
