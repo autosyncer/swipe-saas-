@@ -1740,24 +1740,28 @@ function EntryPageInner() {
                   { label: '+3 Days', days: 3 },
                   { label: '+7 Days', days: 7 },
                   { label: '+15 Days', days: 15 },
-                ].map(({ label, days }) => (
-                  <button
-                    key={days}
-                    type="button"
-                    onClick={() => {
-                      const d = new Date()
-                      d.setDate(d.getDate() + days)
-                      setReminderDate(d.toISOString().split('T')[0])
-                    }}
-                    style={{
-                      background: 'white', border: '1px solid #86efac',
-                      borderRadius: '4px', padding: '3px 8px',
-                      fontSize: '11px', cursor: 'pointer', color: '#166534',
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
+                ].map(({ label, days }) => {
+                  const target = (() => { const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString().split('T')[0] })()
+                  const active = reminderDate === target
+                  return (
+                    <button
+                      key={days}
+                      type="button"
+                      onClick={() => setReminderDate(active ? '' : target)}
+                      style={{
+                        background: active ? '#16a34a' : 'white',
+                        border: `1px solid ${active ? '#16a34a' : '#86efac'}`,
+                        borderRadius: '4px', padding: '3px 8px',
+                        fontSize: '11px', cursor: 'pointer',
+                        color: active ? 'white' : '#166534',
+                        fontWeight: active ? 600 : 400,
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
               </div>
             </div>
           )}
