@@ -297,9 +297,9 @@ function CustomerPanel({
     name: customer?.name || '',
     phone: customer?.phone || '',
     charge: String(customer?.default_charge_pct || '2.2'),
-    consignee_name: customer?.consignee_name || '',
+    consignee_name: customer?.consignee_name || customer?.name || '',
     consignee_address: customer?.consignee_address || '',
-    buyer_name: customer?.buyer_name || '',
+    buyer_name: customer?.buyer_name || customer?.name || '',
     buyer_address: customer?.buyer_address || '',
   })
   const [cards, setCards] = useState<DraftCard[]>([])
@@ -505,7 +505,11 @@ function CustomerPanel({
                     style={{ borderColor: '#e5e7eb' }}
                     placeholder={placeholder}
                     value={(basic as Record<string, string>)[field]}
-                    onChange={e => setBasic(p => ({ ...p, [field]: e.target.value }))}
+                    onChange={e => setBasic(p => ({
+                      ...p,
+                      [field]: e.target.value,
+                      ...(field === 'name' && p.consignee_name === p.name ? { consignee_name: e.target.value, buyer_name: e.target.value } : {}),
+                    }))}
                   />
                 </div>
               ))}
