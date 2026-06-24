@@ -1740,6 +1740,7 @@ function EntryPageInner() {
                   { label: '+3 Days', days: 3 },
                   { label: '+7 Days', days: 7 },
                   { label: '+15 Days', days: 15 },
+                  { label: '+30 Days', days: 30 },
                 ].map(({ label, days }) => {
                   const target = (() => { const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString().split('T')[0] })()
                   const active = reminderDate === target
