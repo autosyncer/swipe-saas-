@@ -65,7 +65,7 @@ export default function SettlementPage() {
     setLoading(true)
     try {
       // ── Card Swap: pending release ──
-      const { data: released } = await supabase.from('swap_releases').select('transaction_id,created_at')
+      const { data: released } = await supabase.from('swap_releases').select('*')
       const releasedIds = new Set((released || []).map((r: { transaction_id: string }) => r.transaction_id))
       const releaseTimeMap = Object.fromEntries((released || []).map((r: { transaction_id: string; created_at: string }) => [r.transaction_id, r.created_at]))
 
