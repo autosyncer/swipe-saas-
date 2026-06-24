@@ -190,16 +190,23 @@ function CardBlock({
           </div>
           <div className="col-span-2">
             <label className={labelCls}>Card Number</label>
-            <input
-              className={inputCls} style={{ borderColor: '#e5e7eb' }}
-              placeholder="XXXX-XXXX-XXXX-XXXX"
-              value={card.card_number || ''}
-              onChange={e => {
-                const formatted = formatCardInput(e.target.value)
-                onChange({ card_number: formatted, last4: lastFour(formatted) })
-              }}
-              maxLength={19}
-            />
+            {(() => {
+              const digits = (card.card_number || '').replace(/\D/g, '')
+              const incomplete = digits.length > 0 && digits.length < 16
+              return (
+                <>
+                  <input
+                    className={inputCls}
+                    style={{ borderColor: incomplete ? '#ef4444' : '#e5e7eb' }}
+                    placeholder="XXXX-XXXX-XXXX-XXXX"
+                    value={card.card_number || ''}
+                    onChange={e => { const f = formatCardInput(e.target.value); onChange({ card_number: f, last4: lastFour(f) }) }}
+                    maxLength={19}
+                  />
+                  {incomplete && <div className="text-[10px] text-red-500 mt-0.5">Must be 16 digits</div>}
+                </>
+              )
+            })()}
           </div>
           <div>
             <label className={labelCls}>Last 4 Digits</label>
@@ -208,7 +215,7 @@ function CardBlock({
           <div>
             <label className={labelCls}>Card Type</label>
             <select className={inputCls} style={{ borderColor: '#e5e7eb' }} value={card.card_type || 'Credit'} onChange={e => onChange({ card_type: e.target.value })}>
-              <option>Credit</option><option>Debit</option><option>Prepaid</option>
+              <option>Credit</option><option>Debit</option>
             </select>
           </div>
           <div>
@@ -221,7 +228,15 @@ function CardBlock({
           </div>
           <div>
             <label className={labelCls}>Expiry (MM/YY)</label>
-            <input className={inputCls} style={{ borderColor: '#e5e7eb' }} placeholder="12/27" value={card.expiry || ''} onChange={e => onChange({ expiry: e.target.value })} maxLength={5} />
+            <input className={inputCls} style={{ borderColor: '#e5e7eb' }} placeholder="06/27"
+              value={card.expiry || ''}
+              onChange={e => {
+                const raw = e.target.value.replace(/\D/g, '').slice(0, 4)
+                const formatted = raw.length > 2 ? raw.slice(0, 2) + '/' + raw.slice(2) : raw
+                onChange({ expiry: formatted })
+              }}
+              maxLength={5}
+            />
           </div>
           <div>
             <label className={labelCls}>Due Date</label>
