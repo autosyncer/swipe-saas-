@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { Download, Search, X, Check, ChevronDown, Bell, Package, Plus, Trash2 } from 'lucide-react'
+import CustomerPanel from '@/components/customers/CustomerPanel'
 import { supabase } from '@/lib/supabase'
 import { Transaction, Customer, Card } from '@/types/database'
 import { logAction } from '@/lib/audit-log'
@@ -129,8 +130,6 @@ function EntryPageInner() {
   const [custSearch, setCustSearch] = useState('')
   const [custSuggestions, setCustSuggestions] = useState<Customer[]>([])
   const [showAddCust, setShowAddCust] = useState(false)
-  const [newCust, setNewCust] = useState({ name: '', phone: '', charge: String(DEFAULT_COMM) })
-  const [savingCust, setSavingCust] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [showCustDrop, setShowCustDrop] = useState(false)
   const custRef = useRef<HTMLDivElement>(null)
@@ -379,23 +378,6 @@ function EntryPageInner() {
     getAccountCurrentBalance(accountName, today).then(bal => {
       setAccountBalances(prev => ({ ...prev, [id]: bal }))
     }).catch(() => {})
-  }
-
-  // ── Add new customer inline ──
-  async function handleAddNewCustomer() {
-    if (!newCust.name.trim()) return
-    setSavingCust(true)
-    const { data, error } = await supabase.from('customers').insert({
-      name: newCust.name.trim(),
-      phone: newCust.phone.trim() || null,
-      default_charge_pct: parseFloat(newCust.charge) || DEFAULT_COMM,
-      outstanding_balance: 0,
-    }).select('id, name, phone, default_charge_pct, outstanding_balance').single()
-    setSavingCust(false)
-    if (error || !data) return
-    setShowAddCust(false)
-    setNewCust({ name: '', phone: '', charge: String(DEFAULT_COMM) })
-    selectCustomer(data as Customer)
   }
 
   // ── Select a customer from autocomplete ──
@@ -935,7 +917,7 @@ function EntryPageInner() {
             <label className={labelCls} style={{ marginBottom: 0 }}>Customer Name</label>
             <button
               type="button"
-              onClick={() => { setShowAddCust(v => !v); setNewCust({ name: custSearch, phone: '', charge: String(DEFAULT_COMM) }) }}
+              onClick={() => setShowAddCust(true)}
               style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, color: '#3ECF8E', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               <Plus size={13} /> Add New
@@ -973,52 +955,6 @@ function EntryPageInner() {
                   <div className="text-xs text-[#6b7280]">{c.phone} — {c.default_charge_pct}% commission</div>
                 </button>
               ))}
-            </div>
-          )}
-          {/* Inline Add Customer form */}
-          {showAddCust && (
-            <div style={{ marginTop: 8, padding: '12px', borderRadius: 8, border: '1px solid #3ECF8E', background: '#f0fdf9' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#065f46', marginBottom: 8 }}>New Customer</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: '#374151', marginBottom: 3 }}>Name *</div>
-                  <input
-                    style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid #e5e7eb', fontSize: 12, outline: 'none' }}
-                    placeholder="Customer name"
-                    value={newCust.name}
-                    onChange={e => setNewCust(p => ({ ...p, name: e.target.value }))}
-                    onKeyDown={e => e.key === 'Enter' && handleAddNewCustomer()}
-                  />
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: '#374151', marginBottom: 3 }}>Phone</div>
-                  <input
-                    style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid #e5e7eb', fontSize: 12, outline: 'none' }}
-                    placeholder="Phone number"
-                    value={newCust.phone}
-                    onChange={e => setNewCust(p => ({ ...p, phone: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 600, color: '#374151', marginBottom: 3 }}>Commission %</div>
-                  <input
-                    type="number"
-                    style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: '1px solid #e5e7eb', fontSize: 12, outline: 'none' }}
-                    value={newCust.charge}
-                    onChange={e => setNewCust(p => ({ ...p, charge: e.target.value }))}
-                  />
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" onClick={() => setShowAddCust(false)}
-                  style={{ padding: '5px 12px', borderRadius: 6, border: '1px solid #e5e7eb', fontSize: 12, background: 'white', cursor: 'pointer', color: '#374151' }}>
-                  Cancel
-                </button>
-                <button type="button" onClick={handleAddNewCustomer} disabled={savingCust || !newCust.name.trim()}
-                  style={{ padding: '5px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600, background: '#3ECF8E', color: 'white', cursor: 'pointer', opacity: savingCust || !newCust.name.trim() ? 0.6 : 1 }}>
-                  {savingCust ? 'Saving...' : 'Add & Select'}
-                </button>
-              </div>
             </div>
           )}
         </div>
@@ -2043,6 +1979,17 @@ function EntryPageInner() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Add Customer slide panel */}
+      {showAddCust && (
+        <CustomerPanel
+          onClose={() => setShowAddCust(false)}
+          onSaved={(saved) => {
+            setShowAddCust(false)
+            selectCustomer(saved)
+          }}
+        />
       )}
     </div>
   )
