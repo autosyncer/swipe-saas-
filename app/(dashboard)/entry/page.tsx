@@ -33,6 +33,7 @@ interface AccountEntry {
   commPayMode: string
   commUpiId: string
   commNetBankId: string
+  commCollected: boolean
   paymentModes: PaymentModeEntry[]
   totalAmount: string
   paidAmount: string
@@ -51,7 +52,7 @@ function makeEntry(defaultCommPct = DEFAULT_COMM.toString()): AccountEntry {
     id: Math.random().toString(36).slice(2),
     accountName: '', machineName: '', mdrPct: 0,
     commPct: defaultCommPct, commType: 'Inclusive', commPayMode: 'Cash',
-    commUpiId: '', commNetBankId: '', paymentModes: [],
+    commUpiId: '', commNetBankId: '', commCollected: false, paymentModes: [],
     totalAmount: '', paidAmount: '', swapAmount: '',
     difference: '', remarks: 'PAID', acctDropOpen: false,
   }
@@ -758,7 +759,7 @@ function EntryPageInner() {
       createCCSheetRow(data as Record<string, unknown>)
       createChamundaSheetRow(data as Record<string, unknown>)
       createCustomerSheetRowHelper(data as Record<string, unknown>, snapCustomer?.id || null, snapReminderDate || null)
-      createCommissionSheetRow(data as Record<string, unknown>, entry.commPayMode || null)
+      if (entry.commCollected) createCommissionSheetRow(data as Record<string, unknown>, entry.commPayMode || null)
       // Card Swap: AC deduction happens only after confirm & release in Notifications
       // Card Refill: deduct immediately as before
       if (entryType !== 'swap') {
@@ -1627,6 +1628,26 @@ function EntryPageInner() {
                           <p className="text-[10px] text-[#6b7280] -mt-1">Cash commission will be recorded in Chamunda Sheet.</p>
                         )}
                       </div>
+                    )}
+
+                    {/* Commission Collected tick */}
+                    <label className="flex items-center gap-2 cursor-pointer select-none mt-1"
+                      onClick={() => updateEntry(entry.id, { commCollected: !entry.commCollected })}>
+                      <div style={{
+                        width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+                        border: `2px solid ${entry.commCollected ? '#16a34a' : '#d1d5db'}`,
+                        background: entry.commCollected ? '#16a34a' : '#fff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        transition: 'all 0.15s',
+                      }}>
+                        {entry.commCollected && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                      </div>
+                      <span className="text-xs font-medium" style={{ color: entry.commCollected ? '#16a34a' : '#6b7280' }}>
+                        {entry.commCollected ? 'Commission Collected ✓' : 'Commission Collected?'}
+                      </span>
+                    </label>
+                    {!entry.commCollected && (
+                      <p className="text-[10px] text-[#9ca3af] -mt-1">Commission entry will not be recorded until checked</p>
                     )}
                   </div>
                 )
