@@ -68,7 +68,15 @@ export default function SettlementSheetView() {
     setLoading(true)
 
     // Get all released transaction IDs with settlement time and settler
-    const { data: released } = await supabase.from('swap_releases').select('transaction_id,created_at,settled_by')
+    // settled_by column may not exist yet — fall back to basic select if it fails
+    let released: ReleaseInfo[] | null = null
+    const { data: rel1, error: relErr1 } = await supabase.from('swap_releases').select('transaction_id,created_at,settled_by')
+    if (relErr1) {
+      const { data: rel2 } = await supabase.from('swap_releases').select('transaction_id,created_at')
+      released = rel2 as ReleaseInfo[] | null
+    } else {
+      released = rel1 as ReleaseInfo[] | null
+    }
     const rMap: Record<string, ReleaseInfo> = {}
     ;(released || []).forEach((r: ReleaseInfo) => { rMap[r.transaction_id] = r })
     const releasedIds = new Set(Object.keys(rMap))
