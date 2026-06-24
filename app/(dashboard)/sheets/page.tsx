@@ -1757,8 +1757,8 @@ function CCSheetView() {
     const wb=new ExcelJS.Workbook()
     wb.creator='SwipeSaaS'; wb.created=new Date()
     const border={top:{style:'thin' as const,color:{argb:'FF000000'}},bottom:{style:'thin' as const,color:{argb:'FF000000'}},left:{style:'thin' as const,color:{argb:'FF000000'}},right:{style:'thin' as const,color:{argb:'FF000000'}}}
-    const colWidths=[{width:8},{width:16},{width:20},{width:14},{width:15},{width:22},{width:18},{width:18},{width:10},{width:22},{width:12}]
-    const headers=['SR NO','BANK CODE NO','SWIPE MACHINE NAME','DATE','SWIPE AMOUNT','CUSTOMER AMOUNT','OUR COMMISSION','BANK COMMISSION','STATUS','CUSTOMER NAME','CODE']
+    const colWidths=[{width:8},{width:16},{width:20},{width:14},{width:15},{width:22},{width:18},{width:18},{width:16},{width:10},{width:22},{width:12}]
+    const headers=['SR NO','BANK CODE NO','SWIPE MACHINE NAME','DATE','SWIPE AMOUNT','CUSTOMER AMOUNT','OUR COMMISSION','BANK COMMISSION','OUR PROFIT','STATUS','CUSTOMER NAME','CODE']
     allMachines.forEach(machine=>{
       const ws=wb.addWorksheet(machine.machine_name.slice(0,31))
       ws.columns=colWidths
@@ -1779,12 +1779,13 @@ function CCSheetView() {
         mrows.forEach(r=>{
           const d=new Date(r.date)
           const dateStr=`${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`
-          const dr=ws.addRow([r.sr_no||'',r.tid||'',r.machine_name||'',dateStr,Number(r.swipe_amount)||0,Number(r.customer_amount)||0,Number(r.our_commission)||0,Number(r.bank_commission)||0,r.status||'',r.customer_name||'',r.agent_code||''])
+          const ourProfit=Number(r.our_commission||0)-Number(r.bank_commission||0)
+          const dr=ws.addRow([r.sr_no||'',r.tid||'',r.machine_name||'',dateStr,Number(r.swipe_amount)||0,Number(r.customer_amount)||0,Number(r.our_commission)||0,Number(r.bank_commission)||0,ourProfit,r.status||'',r.customer_name||'',r.agent_code||''])
           dr.eachCell({includeEmpty:true},(c,col)=>{
             c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFFFFF'}}
             c.font={name:'Calibri',size:11}
             c.border=border
-            if(col>=5&&col<=8){ c.numFmt='#,##0.00'; c.alignment={horizontal:'right',vertical:'middle'} }
+            if(col>=5&&col<=9){ c.numFmt='#,##0.00'; c.alignment={horizontal:'right',vertical:'middle'} }
             else { c.alignment={horizontal:'center',vertical:'middle'} }
           })
         })
@@ -1801,7 +1802,7 @@ function CCSheetView() {
 
   const HS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:12,fontFamily:'Calibri,Arial,sans-serif',background:'#FFFF00',color:'#000',fontWeight:'bold',textAlign:'center',whiteSpace:'nowrap'}
   const CS:React.CSSProperties={border:'1px solid #000',padding:'3px 6px',fontSize:12,fontFamily:'Calibri,Arial,sans-serif',background:'#ffffff',color:'#000',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',verticalAlign:'middle',textAlign:'center'}
-  const CW={sr_no:60,tid:120,machine_name:150,date:100,swipe_amount:120,customer_amount:150,our_commission:130,bank_commission:130,status:90,customer_name:160,agent_code:80}
+  const CW={sr_no:60,tid:120,machine_name:150,date:100,swipe_amount:120,customer_amount:150,our_commission:130,bank_commission:130,our_profit:120,status:90,customer_name:160,agent_code:80}
   const W=Object.values(CW).reduce((s,v)=>s+v,0)
   const activeRows = React.useMemo(()=>rows.filter(r=>r.machine_name===activeMachine),[rows,activeMachine])
   const ccDateGroups = React.useMemo(()=>{
@@ -1840,15 +1841,15 @@ function CCSheetView() {
           <table style={{width:W,borderCollapse:'collapse',tableLayout:'fixed'}}>
             <tbody>
               {ccDateGroups.length===0?(
-                <tr><td colSpan={11} style={{textAlign:'center',padding:'32px',color:'#9ca3af'}}>No data for {activeMachine||'this machine'}</td></tr>
+                <tr><td colSpan={12} style={{textAlign:'center',padding:'32px',color:'#9ca3af'}}>No data for {activeMachine||'this machine'}</td></tr>
               ):ccDateGroups.map(([date,drows],gi)=>{
                 const fmtD2=(d:string)=>{ if(!d)return ''; const [y,m,dd]=d.split('-'); return `${parseInt(dd)}/${parseInt(m)}/${y.slice(2)}` }
                 return (
                   <React.Fragment key={date}>
-                    {gi>0&&<tr><td colSpan={11} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
-                    {gi>0&&<tr><td colSpan={11} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
+                    {gi>0&&<tr><td colSpan={12} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
+                    {gi>0&&<tr><td colSpan={12} style={{border:'none',background:'#ffffff',height:16,padding:0}}/></tr>}
                     <tr>
-                      <td colSpan={11} style={{...HS,textAlign:'center',fontSize:13}}>DATE {fmtD2(date)}</td>
+                      <td colSpan={12} style={{...HS,textAlign:'center',fontSize:13}}>DATE {fmtD2(date)}</td>
                     </tr>
                     <tr>
                       <th style={{...HS,width:CW.sr_no}}>SR NO</th>
@@ -1859,6 +1860,7 @@ function CCSheetView() {
                       <th style={{...HS,width:CW.customer_amount}}>CUSTOMER AMOUNT</th>
                       <th style={{...HS,width:CW.our_commission}}>OUR COMMISSION</th>
                       <th style={{...HS,width:CW.bank_commission}}>BANK COMMISSION</th>
+                      <th style={{...HS,width:CW.our_profit}}>OUR PROFIT</th>
                       <th style={{...HS,width:CW.status}}>STATUS</th>
                       <th style={{...HS,width:CW.customer_name}}>CUSTOMER NAME</th>
                       <th style={{...HS,width:CW.agent_code}}>CODE</th>
@@ -1875,6 +1877,7 @@ function CCSheetView() {
                           <td style={{...CS,width:CW.customer_amount,textAlign:'center'}}>{r.customer_amount?Number(r.customer_amount).toLocaleString('en-IN'):''}</td>
                           <td style={{...CS,width:CW.our_commission,textAlign:'center',color:'#2563eb'}}>{r.our_commission?Number(r.our_commission).toLocaleString('en-IN'):''}</td>
                           <td style={{...CS,width:CW.bank_commission,textAlign:'center'}}>{r.bank_commission?Number(r.bank_commission).toLocaleString('en-IN'):''}</td>
+                          <td style={{...CS,width:CW.our_profit,textAlign:'center',color:'#16a34a',fontWeight:600}}>{(()=>{const p=Number(r.our_commission||0)-Number(r.bank_commission||0);return p!==0?p.toLocaleString('en-IN'):''})()}</td>
                           <td style={{...CS,width:CW.status,textAlign:'center'}}>{r.status}</td>
                           <td style={{...CS,width:CW.customer_name}}>{r.customer_name}</td>
                           <td style={{...CS,width:CW.agent_code,textAlign:'center'}}>{r.agent_code}</td>
